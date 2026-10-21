@@ -1,7 +1,7 @@
 # CAVBench: noisy multi-CAV conflict arbitration (built on HighwayEnv)
 
 Status: work in progress (Week 7). Environments, noise model, conflict
-detection, all five arbiters and metrics run end to end; configs, the
+detection, all four arbiters and metrics run end to end; configs, the
 experiment CLI, tests and the statistics notebook are still to be added.
 
 ## Layout
