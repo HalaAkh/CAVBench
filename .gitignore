@@ -1,1 +1,9 @@
-   __pycache__/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.pytest_cache/
+results/*.csv
+!results/pilot/*.csv
+analysis/figures/
+*.egg-info/
+third_party/CoDrivingLLM/
