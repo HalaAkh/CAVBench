@@ -1,0 +1,12 @@
+highway-env>=1.10
+gymnasium>=1.0
+numpy>=1.26
+scipy>=1.11
+pandas>=2.0
+scikit-fuzzy>=0.5
+pyyaml>=6.0
+matplotlib>=3.8
+pytest>=8.0
+jupyter
+# optional, only for the LLM baseline:
+# openai>=1.40

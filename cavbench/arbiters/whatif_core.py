@@ -42,6 +42,7 @@ import numpy as np
 
 from ..conflicts import ConflictGroup
 from ..geometry import route_relation
+from .commitment import platoon_ahead
 from ..state import SceneObservation
 
 GO, YIELD, FREE_CAV, HDV = 0, 1, 2, 3
@@ -82,6 +83,33 @@ class OptionResult:
     risk: float  # R_hat_k
     uncertainty: float  # U_k
     d_min: np.ndarray  # (N,) minimum distance per rollout
+
+
+GRID_DS = 0.25  # [m] resolution of the route lookup tables
+_TABLE_CACHE: dict[tuple, np.ndarray] = {}
+
+
+def _route_table(paths) -> np.ndarray:
+    """Stack, for each route, positions and tangents every GRID_DS metres.
+
+    Shape (M, G, 4) with columns x, y, tx, ty; shorter routes are padded with
+    their last row, which reproduces np.interp's clamping at the route end.
+    """
+    rows = []
+    for p in paths:
+        if p.key not in _TABLE_CACHE or len(_TABLE_CACHE[p.key]) != int(np.ceil(p.length / GRID_DS)) + 1:
+            sg = np.arange(int(np.ceil(p.length / GRID_DS)) + 1) * GRID_DS
+            xy = p.position(sg)
+            t = np.stack([np.interp(sg, p.s, p.tangents[:, 0]),
+                          np.interp(sg, p.s, p.tangents[:, 1])], axis=-1)
+            _TABLE_CACHE[p.key] = np.concatenate([xy, t], axis=-1)
+        rows.append(_TABLE_CACHE[p.key])
+    g = max(len(r) for r in rows) + 1
+    out = np.empty((len(rows), g, 4))
+    for m, r in enumerate(rows):
+        out[m, :len(r)] = r
+        out[m, len(r):] = r[-1]
+    return out
 
 
 def _involved(obs: SceneObservation, group: ConflictGroup, radius: float) -> list[int]:
@@ -126,6 +154,8 @@ def evaluate_options(
             v_target[:, m] = cfg.hdv_desired_speed
     for k, cav in enumerate(group.cavs):
         roles[k, ids.index(cav)] = GO
+        for ahead in platoon_ahead(obs, group, cav):  # vehicles queued ahead go too
+            roles[k, ids.index(ahead)] = GO
 
     # Initial states with imagined errors eta.
     shape = (1 if cfg.common_random_numbers else K, N, M)
@@ -165,22 +195,29 @@ def evaluate_options(
     vt_b = v_target[:, None, :]
     v_max = obs.v_max
 
-    x = np.empty((K, N, M))
-    y = np.empty((K, N, M))
-    tx = np.empty((K, N, M))
-    ty = np.empty((K, N, M))
+    # Directed pairs (follower fi, candidate leader lj) on a shared stretch,
+    # grouped by follower so that per-follower minima use np.minimum.reduceat.
+    fi, lj = np.nonzero(shared)
+    order = np.argsort(fi, kind="stable")
+    fi, lj = fi[order], lj[order]
+    p_si, p_sj, p_len = sh_start_i[fi, lj], sh_start_j[fi, lj], sh_len[fi, lj]
+    seg = np.flatnonzero(np.r_[True, fi[1:] != fi[:-1]]) if len(fi) else np.array([], int)
+    followers = fi[seg]
+
+    # Route lookup tables: position and tangent every GRID_DS metres.
+    table = _route_table(paths)  # (M, G, 4): x, y, tx, ty
+    g_max = table.shape[1] - 1
+    m_idx = np.arange(M)[None, None, :]
+    interaction = np.zeros((K, N, M))
+    has_leader = np.zeros((K, N, M), dtype=bool)
+
     for step in range(cfg.steps + 1):
-        for m, p in enumerate(paths):
-            sm = s[..., m]
-            x[..., m] = np.interp(sm, p.s, p.points[:, 0])
-            y[..., m] = np.interp(sm, p.s, p.points[:, 1])
-            tx[..., m] = np.interp(sm, p.s, p.tangents[:, 0])
-            ty[..., m] = np.interp(sm, p.s, p.tangents[:, 1])
+        u = np.clip(s / GRID_DS, 0.0, g_max - 1e-9)
+        i0 = u.astype(np.int64)
+        w = (u - i0)[..., None]
+        xyt = table[m_idx, i0] * (1.0 - w) + table[m_idx, i0 + 1] * w
+        x, y, tx, ty = xyt[..., 0], xyt[..., 1], xyt[..., 2], xyt[..., 3]
         active = s < path_len  # vehicles leave the scene at the end of their route
-        dx = x[:, :, None, :] - x[:, :, :, None]  # [i, j] = x_j - x_i
-        dy = y[:, :, None, :] - y[:, :, :, None]
-        dist = np.hypot(dx, dy)
-        both = active[:, :, :, None] & active[:, :, None, :]
 
         if len(ia):  # footprint clearance of the relevant pairs (three-circle model)
             cx_a = x[..., ia, None] + tx[..., ia, None] * offsets
@@ -196,17 +233,20 @@ def evaluate_options(
             break
 
         # Leaders: vehicles already on a shared stretch of lane and further
-        # along it than i (see geometry.is_leader); IDM interaction term.
-        txi, tyi = tx[:, :, :, None], ty[:, :, :, None]
-        p_i = s[:, :, :, None] - sh_start_i
-        p_j = s[:, :, None, :] - sh_start_j
-        leader = shared & (p_j >= 0) & (p_j <= sh_len) & (p_j > p_i)
-        leader &= (dist < cfg.leader_range) & both
-        gap = np.maximum(dist - cfg.vehicle_length, 0.1)
-        v_j_along = v[:, :, None, :] * (txi * tx[:, :, None, :] + tyi * ty[:, :, None, :])
-        vi = v[:, :, :, None]
-        s_star = cfg.idm_s0 + np.maximum(0.0, vi * cfg.idm_T + vi * (vi - v_j_along) / sqrt_ab)
-        interaction = np.where(leader, -cfg.idm_a * (s_star / gap) ** 2, 0.0).min(axis=-1)
+        # along it than the follower (see geometry.is_leader); IDM interaction.
+        if len(fi):
+            dp = np.hypot(x[..., lj] - x[..., fi], y[..., lj] - y[..., fi])
+            pos_i = s[..., fi] - p_si
+            pos_j = s[..., lj] - p_sj
+            lead = (pos_j >= 0) & (pos_j <= p_len) & (pos_j > pos_i)
+            lead &= (dp < cfg.leader_range) & active[..., fi] & active[..., lj]
+            gap = np.maximum(dp - cfg.vehicle_length, 0.1)
+            vi = v[..., fi]
+            v_j_along = v[..., lj] * (tx[..., fi] * tx[..., lj] + ty[..., fi] * ty[..., lj])
+            s_star = cfg.idm_s0 + np.maximum(0.0, vi * cfg.idm_T + vi * (vi - v_j_along) / sqrt_ab)
+            term = np.where(lead, -cfg.idm_a * (s_star / gap) ** 2, 0.0)
+            interaction[..., followers] = np.minimum.reduceat(term, seg, axis=-1)
+            has_leader[..., followers] = np.logical_or.reduceat(lead, seg, axis=-1)
 
         # Commanded acceleration by role.
         a_go = np.minimum(cfg.kp * (v_max - v), cfg.a_go)
@@ -216,7 +256,6 @@ def evaluate_options(
         a_cmd = np.select(
             [roles_b == GO, roles_b == YIELD, roles_b == FREE_CAV], [a_go, a_yield, a_free], a_hdv
         )
-        has_leader = leader.any(axis=-1)
         a_follow = np.where(has_leader, cfg.idm_a + interaction, np.inf)
         a = np.where(roles_b == HDV, a_cmd, np.minimum(a_cmd, a_follow))
         a = np.maximum(a, cfg.a_min)

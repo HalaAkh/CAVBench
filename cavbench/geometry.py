@@ -136,7 +136,11 @@ def meeting_points(pi: Path, pj: Path, meet_distance: float) -> list[MeetingPoin
     starts = np.flatnonzero(close & ~np.concatenate([[False], close[:-1]]))
     ends = np.flatnonzero(close & ~np.concatenate([close[1:], [False]]))
     for a, e in zip(starts, ends):
-        b = int(np.argmin(dist[a]))
+        # Entry point on path j: the first point of j within meet_distance of
+        # this stretch of i (as in the benchmark, both vehicles' distances are
+        # measured to where they enter the conflict zone).
+        near_j = np.flatnonzero(dist[a:e + 1].min(axis=0) < meet_distance)
+        b = int(near_j[0]) if len(near_j) else int(np.argmin(dist[a]))
         out.append(MeetingPoint(float(pi.s[a]), float(pj.s[b]), float(pi.s[e] - pi.s[a])))
     return out
 
@@ -155,11 +159,33 @@ def route_relation(pa: Path, pb: Path, meet_distance: float = 1.0):
     if key not in _RELATION_CACHE:
         ab = meeting_points(pa, pb, meet_distance)
         ba = meeting_points(pb, pa, meet_distance)
-        sh_ab = next((mp for mp in ab if mp.shared), None)
-        sh_ba = next((mp for mp in ba if mp.shared), None)
-        _RELATION_CACHE[key] = (bool(ab), sh_ab)
-        _RELATION_CACHE[(pb.key, pa.key)] = (bool(ba) or bool(ab), sh_ba)
+        _RELATION_CACHE[key] = (bool(ab), follow_stretch(pa, pb))
+        _RELATION_CACHE[(pb.key, pa.key)] = (bool(ba) or bool(ab), follow_stretch(pb, pa))
     return _RELATION_CACHE[key]
+
+
+FOLLOW_DISTANCE = 2.2  # [m] about one car width
+FOLLOW_ALIGNMENT = 0.9  # cos(~25 deg): paths heading the same way
+
+
+def follow_stretch(pa: Path, pb: Path) -> MeetingPoint | None:
+    """First stretch on which a vehicle on route a can run into one on route b
+    from behind: the routes are within a car width of each other AND heading the
+    same way. This covers sharing a lane, merging, and two routes that leave the
+    same lane and diverge gradually (their car bodies still overlap for several
+    metres). Crossing routes are excluded by the alignment condition."""
+    diff = pa.points[:, None, :] - pb.points[None, :, :]
+    dist = np.sqrt(np.einsum("ijk,ijk->ij", diff, diff))
+    jn = dist.argmin(axis=1)
+    near = dist[np.arange(len(jn)), jn] < FOLLOW_DISTANCE
+    aligned = np.einsum("ij,ij->i", pa.tangents, pb.tangents[jn]) > FOLLOW_ALIGNMENT
+    close = near & aligned
+    starts = np.flatnonzero(close & ~np.concatenate([[False], close[:-1]]))
+    ends = np.flatnonzero(close & ~np.concatenate([close[1:], [False]]))
+    for a, e in zip(starts, ends):
+        if pa.s[e] - pa.s[a] >= SHARED_MIN_LENGTH:
+            return MeetingPoint(float(pa.s[a]), float(pb.s[jn[a]]), float(pa.s[e] - pa.s[a]))
+    return None
 
 
 def is_leader(rel_shared, s_me: float, s_other: float) -> bool:

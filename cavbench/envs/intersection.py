@@ -32,6 +32,7 @@ class CAVIntersectionEnv(ArbitrationEnvMixin, MultiAgentIntersectionEnv):
                 "destination": None,
                 "cav_start_mean": 65.0,  # [m] along the 100 m approach lane
                 "cav_start_std": 5.0,
+                "cav_wave_gap": 15.0,  # [m] between CAVs on the same approach
                 "exit_distance": 15.0,  # [m] benchmark value
                 "show_trajectories": False,
             }
@@ -75,16 +76,19 @@ class CAVIntersectionEnv(ArbitrationEnvMixin, MultiAgentIntersectionEnv):
             self._spawn_vehicle(60, spawn_probability=1.0, go_straight=True,
                                 position_deviation=0.1, speed_deviation=0.0)
 
-        # CAVs: one per approach (a second wave starts 15 m further back).
+        # CAVs: one per approach; further waves start exactly `cav_wave_gap`
+        # metres behind the previous CAV on the same approach.
         self.controlled_vehicles = []
         v0 = self.config["cav_initial_speed"]
+        first_wave: dict[int, float] = {}
         for ego_id in range(self.config["controlled_vehicles"]):
             origin = ego_id % 4
             lane = self.road.network.get_lane((f"o{origin}", f"ir{origin}", 0))
             dest = self.config["destination"] or f"o{rng.choice([d for d in range(4) if d != origin])}"
-            longitudinal = (self.config["cav_start_mean"]
-                            + self.config["cav_start_std"] * rng.normal()
-                            - 15.0 * (ego_id // 4))
+            if origin not in first_wave:
+                first_wave[origin] = (self.config["cav_start_mean"]
+                                      + self.config["cav_start_std"] * rng.normal())
+            longitudinal = first_wave[origin] - self.config["cav_wave_gap"] * (ego_id // 4)
             ego = self.action_type.vehicle_class(
                 self.road, lane.position(longitudinal, 0.0), speed=v0,
                 heading=lane.heading_at(longitudinal),

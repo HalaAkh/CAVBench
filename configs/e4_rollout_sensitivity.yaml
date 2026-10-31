@@ -1,0 +1,12 @@
+# E4: empirical check of Theorem 1. Decision situations are collected from
+# episodes; the risk with N rollouts is compared with a 10,000-rollout reference.
+name: e4_rollout_sensitivity
+scenario: intersection
+env: {}
+noise_levels: [medium, high]
+situations: 30          # decision situations per noise level
+every: 5                # keep every 5th situation with at least 2 conflicting CAVs
+reference_rollouts: 10000
+n_values: [25, 50, 100, 200]
+repeats: 50             # independent re-estimates per situation and N
+seed: 7

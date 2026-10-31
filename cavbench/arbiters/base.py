@@ -32,7 +32,19 @@ def toward_speed(current_target: float | None, desired: float) -> int:
 
 @dataclass
 class FollowingSafety:
-    """Brake for vehicles ahead on the CAV's own route (noisy states)."""
+    """Brake for vehicles ahead on the CAV's own route (noisy states).
+
+    mode="follow" (default): car-following only, i.e. vehicles ahead that are
+    travelling the same way on the same lane, a merging lane or a lane that
+    diverges from it. Crossing conflicts are left entirely to the arbiter, as in
+    the CoDrivingLLM benchmark.
+    mode="full": additionally brake for any vehicle physically on the CAV's
+    path ahead, including crossing traffic (a stronger low-level layer that can
+    mask arbitration errors).
+    """
+
+    mode: str = "follow"
+    align: float = 0.7  # cos of the max heading difference for "same way"
 
     s0: float = 3.0  # [m] standstill gap
     time_gap: float = 1.2  # [s]
@@ -56,7 +68,9 @@ class FollowingSafety:
             # (a) anything physically on my route ahead
             s_o, lat = me.path.project(other.position)
             ds = s_o - me.s
-            if lat < self.lateral_tol and 0 < ds < self.look_ahead:
+            if lat < self.lateral_tol and 0 < ds < self.look_ahead and (
+                    self.mode == "full"
+                    or float(np.dot(me.path.tangent(s_o), other.path.tangent(other.s))) > self.align):
                 gap = min(gap, ds - self.vehicle_length)
             # (b) a vehicle already on a shared stretch of lane, ahead of me
             elif dist < self.leader_range and is_leader(
@@ -78,11 +92,13 @@ class Arbiter:
 
     name = "base"
 
-    def __init__(self, conflict: dict | ConflictConfig | None = None, safety: bool = True,
+    def __init__(self, conflict: dict | ConflictConfig | None = None, safety: bool | str = "follow",
                  seed: int | None = None) -> None:
         cfg = conflict if isinstance(conflict, ConflictConfig) else ConflictConfig(**(conflict or {}))
         self.detector = ConflictDetector(cfg)
-        self.safety = FollowingSafety() if safety else None
+        if safety is True:
+            safety = "follow"
+        self.safety = FollowingSafety(mode=safety) if safety else None
         self.rng = np.random.default_rng(seed)
         self.decision_times: list[float] = []  # [ms], steps with at least one conflict
         self.log: list[dict] = []

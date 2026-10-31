@@ -8,14 +8,15 @@ Steps 1-5 simulate every option; Step 6 decides with fuzzy inference:
     A_k* <= 0.4       -> Reject:   fallback, conflicting CAVs slow down
 
 W is how long the group has been held in fallback. Ties in A are broken by
-lower R_hat, then lower U. See commitment.py for priority persistence and for
+lower R_hat, lower U, then earlier arrival. "k goes" includes the CAVs queued
+ahead of k in its lane. See commitment.py for priority persistence and for
 letting CAVs that can no longer stop clear the conflict area in fallback.
 Ablations: use_uncertainty=False (U fixed at 0), use_fallback=False.
 """
 from __future__ import annotations
 
 from .base import FASTER, SLOWER, Arbiter, toward_speed
-from .commitment import committed_cavs, pick_with_persistence
+from .commitment import arrival_time, committed_cavs, pick_with_persistence, platoon_ahead
 from .fuzzy import A_HIGH, A_LOW, FuzzyAcceptability, band
 from .whatif_core import RolloutConfig, evaluate_options
 
@@ -53,7 +54,8 @@ class WhatIfFuzzyArbiter(Arbiter):
             goers = [r.goer for r in res]
             prev = next((v for v in g.cavs if v in self.prev_goers), None)
             k = pick_with_persistence(acc, goers, prev, self.persistence_margin, True,
-                                      [(risk[i], unc[i]) for i in range(len(res))])
+                                      [(risk[i], unc[i], arrival_time(g, goers[i]))
+                                       for i in range(len(res))])
             mode = band(acc[k], self.a_low, self.a_high)
             if mode == "reject" and not self.use_fallback:
                 mode = "cautious"
@@ -65,8 +67,9 @@ class WhatIfFuzzyArbiter(Arbiter):
                     c = min(committed, key=lambda v: res[goers.index(v)].risk)
                     if res[goers.index(c)].risk < fb.risk:
                         goer, mode = c, "reject_clear"
+            moving = {goer, *platoon_ahead(obs, g, goer)} if goer is not None else set()
             for v in g.cavs:
-                if v != goer:
+                if v not in moving:
                     actions[v] = SLOWER
                 elif mode in ("accept", "reject_clear"):
                     actions[v] = FASTER

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cavbench"
+version = "0.1.0"
+description = "Noisy multi-CAV conflict arbitration with what-if simulation and fuzzy decisions, built on HighwayEnv"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Hala El Akhrass"}, {name = "Mariam Kafel"}]
+requires-python = ">=3.10"
+dependencies = ["highway-env>=1.10", "gymnasium>=1.0", "numpy>=1.26", "scipy>=1.11",
+                "pandas>=2.0", "scikit-fuzzy>=0.5", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+llm = ["openai>=1.40"]
+dev = ["pytest>=8.0", "matplotlib>=3.8", "jupyter"]
+
+[tool.setuptools.packages.find]
+include = ["cavbench*"]

@@ -1,0 +1,17 @@
+# E5 (H4): decision time of the proposed method. Run with --workers 1.
+name: e5_realtime
+episodes: 30
+seed_offset: 0
+noise_levels: [none, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+  - label: intersection_dense
+    scenario: intersection
+    env: {controlled_vehicles: 8, initial_vehicle_count: 14}
+  - label: merge
+    scenario: merge
+    env: {}
+arbiters:
+  - {label: UCRA, kind: whatif_fuzzy}

@@ -1,0 +1,18 @@
+# E2 (H2): with vs without the uncertainty input of the fuzzy layer (U fixed at Low).
+name: e2_uncertainty_ablation
+episodes: 200
+seed_offset: 0
+noise_levels: [none, low, medium, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+  - label: intersection_dense
+    scenario: intersection
+    env: {controlled_vehicles: 8, initial_vehicle_count: 14}
+  - label: merge
+    scenario: merge
+    env: {}
+arbiters:
+  - {label: UCRA, kind: whatif_fuzzy}
+  - {label: UCRA-noU, kind: whatif_fuzzy, params: {use_uncertainty: false}}
