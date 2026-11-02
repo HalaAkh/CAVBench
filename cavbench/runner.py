@@ -39,6 +39,7 @@ def run_episode(env, arbiter: Arbiter, seed: int, keep_log: bool = False) -> dic
         "n_fallback": int(sum(n for m, n in modes.items() if m.startswith(("fallback", "reject")))),
         "n_cautious": int(modes.get("cautious", 0)),
     })
+    m.update(arbiter.extra_metrics())
     if keep_log:
         m["log"] = list(arbiter.log)
     return m

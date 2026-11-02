@@ -1,0 +1,10 @@
+# Tests the whole LLM pipeline without an API key: the "mock" model answers
+# with the arrival order. Results go to results/llm_mock.csv (not used in the paper).
+name: llm_mock
+episodes: 3
+noise_levels: [none, high]
+scenarios:
+  - {label: intersection, scenario: intersection, env: {}}
+  - {label: merge, scenario: merge, env: {}}
+arbiters:
+  - {label: CoDrivingLLM-mock, kind: codrivingllm, params: {model: mock}}

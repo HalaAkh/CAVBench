@@ -19,5 +19,6 @@ arbiters:
   - {label: UCRA, kind: whatif_fuzzy}
   - {label: FCFS, kind: fcfs}
   - {label: NoCoord, kind: no_coordination}
-  # Requires OPENAI_API_KEY; remove or comment out to run without it.
-  - {label: CoDrivingLLM, kind: codrivingllm, params: {model: gpt-4o-mini}}
+# The LLM baseline is in e1_llm.yaml (it needs an OpenAI API key). It writes to
+# the same results file, results/e1_baselines.csv, so the notebook compares all
+# four methods on the same seeds.

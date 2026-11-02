@@ -115,6 +115,10 @@ class Arbiter:
     def arbitrate(self, obs: SceneObservation, groups: list[ConflictGroup]) -> dict[int, int]:
         raise NotImplementedError
 
+    def extra_metrics(self) -> dict:
+        """Arbiter-specific per-episode numbers (e.g. LLM calls and cost)."""
+        return {}
+
     def act(self, obs: SceneObservation, all_cavs: list[int]) -> dict[int, int]:
         t0 = time.perf_counter()
         groups = self.detector.groups(obs)

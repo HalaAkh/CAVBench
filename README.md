@@ -1,6 +1,6 @@
 # CAVBench
 
-**Noisy multi-CAV conflict arbitration with what-if simulation and fuzzy decisions, built on [HighwayEnv](https://github.com/Farama-Foundation/HighwayEnv).**
+**A simulation environment for multi-CAV conflict arbitration under perception noise, with what-if simulation and fuzzy decisions.**
 
 CAVBench is the simulation environment of the study *"Uncertainty-aware counterfactual
 risk arbitration for connected autonomous vehicles with fuzzy decision-making"*
@@ -16,7 +16,12 @@ risk arbitration for connected autonomous vehicles with fuzzy decision-making"*
 - **Metrics:** success, collisions, post-encroachment time (PET < 1.5 s = severe
   conflict), average speed and decision time;
 - **Experiment protocol:** YAML configurations, matched random seeds, a parallel and
-  resumable runner, and a statistics notebook.
+  resumable runner, and a statistics notebook;
+- **Viewer:** watch any episode with its decisions, or save it as a video.
+
+CAVBench uses the open-source [HighwayEnv](https://github.com/Farama-Foundation/HighwayEnv)
+library (Leurent, 2018) for vehicle kinematics, road geometry and drawing, as does the
+CoDrivingLLM benchmark.
 
 ## Installation
 
@@ -53,8 +58,9 @@ python experiments/watch.py --seed 3 --save videos/ucra_seed3.mp4   # save a vid
 ```
 
 Options: `--scenario` (intersection, intersection_dense, merge), `--arbiter`
-(ucra, ucra_nou, ucra_nofallback, fcfs, nocoord, llm), `--noise` (none, low,
-medium, high), `--seed`, `--speed` (playback speed) and `--save`. The episode is
+(ucra, ucra_nou, ucra_nofallback, fcfs, nocoord, llm, llm_mock), `--noise` (none, low,
+medium, high), `--seed`, `--speed` (playback speed), `--save` and `--no-trails`
+(the recent path of each car is drawn by default, as in CoDrivingLLM's videos). The episode is
 exactly the one the experiments run for the same settings.
 
 On screen: blue cars are human drivers; numbered cars are CAVs, coloured by the
@@ -65,32 +71,58 @@ uncertainty U and fuzzy acceptability A.
 
 ## Running the experiments
 
-| Experiment | Config | Purpose |
+**Everything, with one command** (resumes where it stopped if interrupted):
+
+```bash
+python experiments/run_all.py              # E4, E5, E2, E3 and E1 without the LLM
+python experiments/run_all.py --with-llm   # the same, plus the LLM baseline (API key)
+jupyter notebook analysis/statistics.ipynb # tables, statistical tests, figures
+```
+
+Use `--episodes 20` for a quick trial. The experiments one by one:
+
+| Experiment | Config | Question |
 |---|---|---|
-| Smoke test | `configs/smoke.yaml` | 2 episodes per condition, checks that everything runs |
-| E1 | `configs/e1_baselines.yaml` | UCRA vs LLM arbiter, FCFS and no coordination (H1) |
-| E2 | `configs/e2_uncertainty_ablation.yaml` | with vs without the uncertainty input (H2) |
+| Smoke test | `configs/smoke.yaml` | does everything run? (2 episodes per condition) |
+| E1 | `configs/e1_baselines.yaml` + `configs/e1_llm.yaml` | UCRA vs the LLM coordinator, FCFS and no coordination (H1) |
+| E2 | `configs/e2_uncertainty_ablation.yaml` | with vs without the uncertainty input U (H2) |
 | E3 | `configs/e3_fallback_ablation.yaml` | with vs without the fallback (H3) |
-| E4 | `configs/e4_rollout_sensitivity.yaml` | empirical check of Theorem 1 |
+| E4 | `configs/e4_rollout_sensitivity.yaml` | are N = 100 rollouts enough? (Theorem 1) |
 | E5 | `configs/e5_realtime.yaml` | decision time (H4); run with `--workers 1` |
 
 ```bash
-python experiments/run_experiment.py configs/smoke.yaml
 python experiments/run_experiment.py configs/e1_baselines.yaml --workers 8
 python experiments/run_experiment.py configs/e5_realtime.yaml --workers 1
 python experiments/rollout_sensitivity.py configs/e4_rollout_sensitivity.yaml
-jupyter notebook analysis/statistics.ipynb
 ```
 
-Results are written to `results/<experiment>.csv`, one row per episode. If a run is
-interrupted, running the same command again continues where it stopped. The
-`--episodes N` option overrides the number of seeds (200 by default, from the power
-analysis).
+Results are written to `results/<experiment>.csv`, one row per episode, and every
+method runs on the same seeds (same traffic, same noise samples). `--episodes N`
+overrides the number of seeds (200 by default, from the power analysis).
 
-The LLM arbiter calls `gpt-4o-mini` through the OpenAI API: `pip install openai`
-and set `OPENAI_API_KEY`. It is listed in E1 but can be removed from the config to
-run without an API key. To run the original CoDrivingLLM code instead, see
-`third_party/README.md`.
+### The LLM baseline (CoDrivingLLM-style)
+
+As in CoDrivingLLM, which compared all its baselines inside its own simulator, the
+LLM coordinator runs inside CAVBench on the same situations as the other methods.
+It calls `gpt-4o-mini` through the OpenAI API:
+
+1. Create a key at platform.openai.com (Settings → Billing: add about $10 of credit;
+   API keys → Create new secret key). Never put the key in the code or on GitHub.
+2. `pip install openai`, then set the key: Windows `setx OPENAI_API_KEY "sk-..."`
+   (reopen the terminal); Mac/Linux `export OPENAI_API_KEY=sk-...`.
+3. `python experiments/llm_check.py` makes one test call, runs 5 episodes and
+   estimates the cost and time of the full run.
+4. `python experiments/run_experiment.py configs/e1_llm.yaml --workers 8`, or
+   `python experiments/run_all.py --with-llm`. The rows go into the same
+   `results/e1_baselines.csv` as the other methods.
+
+Every reply is cached in `results/llm_cache/`, so an interrupted run resumes without
+paying twice; API errors are retried, and the run stops with a clear message if the
+key is wrong or the API is unreachable. The CSV records the calls, tokens and cost
+of each episode. To test the pipeline without a key, use the `mock` model
+(`configs/llm_mock.yaml`, or `python experiments/watch.py --arbiter llm_mock`), which
+answers with the arrival order. To run the original CoDrivingLLM code in its own
+simulator, see `third_party/README.md`.
 
 ## Method in brief (UCRA)
 
@@ -134,7 +166,8 @@ cavbench/
   geometry.py    routes as polylines, meeting points
   runner.py      one episode with matched seeds
 configs/         experiment configurations (YAML)
-experiments/     run_experiment.py, rollout_sensitivity.py, watch.py (graphics)
+experiments/     run_all.py, run_experiment.py, rollout_sensitivity.py,
+                 llm_check.py, watch.py (graphics)
 analysis/        statistics.ipynb
 docs/            fuzzy_layer.md
 tests/           pytest suite

@@ -1,0 +1,26 @@
+# E1, LLM baseline (CoDrivingLLM-style coordinator, gpt-4o-mini).
+# Same scenarios, noise levels and seeds as e1_baselines.yaml, and the same
+# results file (name: e1_baselines), so the rows sit next to the other methods.
+#
+# Needs OPENAI_API_KEY. Check cost and speed first:
+#     python experiments/llm_check.py
+# then run (API calls wait on the network, so more workers than cores is fine):
+#     python experiments/run_experiment.py configs/e1_llm.yaml --workers 8
+# Replies are cached in results/llm_cache/, so an interrupted run resumes
+# without paying again.
+name: e1_baselines
+episodes: 200
+seed_offset: 0
+noise_levels: [none, low, medium, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+  - label: intersection_dense
+    scenario: intersection
+    env: {controlled_vehicles: 8, initial_vehicle_count: 14}
+  - label: merge
+    scenario: merge
+    env: {}
+arbiters:
+  - {label: CoDrivingLLM, kind: codrivingllm, params: {model: gpt-4o-mini}}

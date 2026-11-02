@@ -75,11 +75,15 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("config", type=Path)
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--force", action="store_true", help="recompute even if the output exists")
     args = ap.parse_args(argv)
     warnings.filterwarnings("ignore")
     cfg = yaml.safe_load(args.config.read_text())
     out = args.out or ROOT / "results" / f"{cfg['name']}.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists() and not args.force:
+        print(f"{out} already exists; skipping (use --force to recompute).")
+        return
 
     rows = []
     rng = np.random.default_rng(cfg.get("seed", 7))

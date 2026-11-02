@@ -50,6 +50,7 @@ ARBITERS = {  # short name -> (kind, params, label)
     "fcfs": ("fcfs", {}, "First come, first served"),
     "nocoord": ("no_coordination", {}, "No coordination"),
     "llm": ("codrivingllm", {"model": "gpt-4o-mini"}, "CoDrivingLLM-style (gpt-4o-mini)"),
+    "llm_mock": ("codrivingllm", {"model": "mock"}, "CoDrivingLLM-style (mock, no API)"),
 }
 VIEW = {  # screen size [px], scaling [px/m], camera centre [m]
     "intersection": {"screen_width": 820, "screen_height": 820, "scaling": 5.2,
@@ -189,8 +190,15 @@ class Watcher:
     def _decision_text(self) -> str:
         if not self.groups:
             return "No conflict: CAVs drive normally."
-        log = [e for e in self.arbiter.log if self.obs is not None
-               and abs(e.get("time", -1) - self.obs.time) < 1e-6 and "acceptability" in e]
+        now = [e for e in self.arbiter.log if self.obs is not None
+               and abs(e.get("time", -1) - self.obs.time) < 1e-6]
+        llm = [e for e in now if "order" in e]
+        if llm:  # LLM coordinator: show its passing order
+            return "   ||   ".join(
+                "LLM passing order: " + " > ".join(
+                    (f"CAV {self.label[v]}" if v in self.label else f"car {v}") for v in e["order"])
+                for e in llm)
+        log = [e for e in now if "acceptability" in e]
         if not log:
             ids = ", ".join(str(self.label.get(c, c)) for g in self.groups for c in g.cavs)
             return f"Conflict between CAVs {ids} (Delta TTCP < 8 s)."
@@ -230,6 +238,8 @@ def main(argv=None) -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--save", default=None, help="save to .mp4 or .gif instead of opening a window")
     p.add_argument("--speed", type=float, default=1.0, help="playback speed (window only)")
+    p.add_argument("--no-trails", action="store_true",
+                   help="do not draw the recent path of each car (drawn by default, as in CoDrivingLLM)")
     a = p.parse_args(argv)
 
     if a.save and not os.environ.get("DISPLAY") and sys.platform.startswith("linux"):
@@ -239,7 +249,8 @@ def main(argv=None) -> None:
     scenario, env_cfg = SCENARIOS[a.scenario]
     view = dict(VIEW[scenario])
     camera = view.pop("camera")
-    env = make_env(scenario, {**env_cfg, **view, "noise_level": a.noise}, render_mode="rgb_array")
+    env = make_env(scenario, {**env_cfg, **view, "noise_level": a.noise,
+                              "show_trajectories": not a.no_trails}, render_mode="rgb_array")
     kind, params, title = ARBITERS[a.arbiter]
     arbiter = make_arbiter(kind, **params)
 

@@ -47,6 +47,9 @@ METRIC_COLUMNS = [
     "any_severe_conflict", "min_pet", "avg_speed", "episode_time", "steps",
     "decision_ms_mean", "decision_ms_p95", "decision_ms_max", "n_decisions",
     "n_fallback", "n_cautious",
+    # LLM baseline only (0 for the other arbiters):
+    "llm_calls", "llm_cache_hits", "llm_tokens_in", "llm_tokens_out", "llm_cost_usd",
+    "llm_failures", "llm_parse_failures",
 ]
 COLUMNS = KEY_COLUMNS + ["kind"] + METRIC_COLUMNS + ["wall_s"]
 
@@ -74,7 +77,7 @@ def _run(task):
         "arbiter": task["arbiter_label"], "noise": task["noise"], "seed": task["seed"],
         "kind": task["kind"], "wall_s": round(time.perf_counter() - t0, 3),
     }
-    row.update({k: m[k] for k in METRIC_COLUMNS})
+    row.update({k: m.get(k, 0) for k in METRIC_COLUMNS})
     return row
 
 
@@ -137,6 +140,12 @@ def main(argv=None) -> None:
         return
 
     new_file = not out.exists()
+    if not new_file:
+        with out.open(newline="") as f:
+            header = next(csv.reader(f), [])
+        if header != COLUMNS:
+            raise SystemExit(f"{out} was written by an older version of CAVBench (different "
+                             f"columns). Rename or delete it and run again.")
     t0 = time.time()
     with out.open("a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=COLUMNS)
