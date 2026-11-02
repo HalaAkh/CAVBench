@@ -39,6 +39,30 @@ env = make_env("intersection", {"noise_level": "high"})
 print(run_episode(env, make_arbiter("whatif_fuzzy"), seed=0))
 ```
 
+## Watching an episode
+
+The experiments run without graphics, which is much faster. To **see** the roads,
+the cars and the decisions of one episode, open it in a window:
+
+```bash
+python experiments/watch.py                                   # UCRA, intersection, high noise
+python experiments/watch.py --arbiter fcfs --seed 3           # another method / situation
+python experiments/watch.py --scenario intersection_dense --seed 7
+python experiments/watch.py --scenario merge --noise none
+python experiments/watch.py --seed 3 --save videos/ucra_seed3.mp4   # save a video (.mp4 or .gif)
+```
+
+Options: `--scenario` (intersection, intersection_dense, merge), `--arbiter`
+(ucra, ucra_nou, ucra_nofallback, fcfs, nocoord, llm), `--noise` (none, low,
+medium, high), `--seed`, `--speed` (playback speed) and `--save`. The episode is
+exactly the one the experiments run for the same settings.
+
+On screen: blue cars are human drivers; numbered cars are CAVs, coloured by the
+arbiter's command (green = go, yellow = cautious, orange = yield, red = crashed);
+small rings show where vehicles *appear* to be in the noisy shared data; magenta
+lines join CAVs in conflict; the top panel shows the latest decision with its risk,
+uncertainty U and fuzzy acceptability A.
+
 ## Running the experiments
 
 | Experiment | Config | Purpose |
@@ -91,7 +115,9 @@ All arbiters share the same low-level layer, so that differences come from the
 arbitration. By default (`safety: follow`) it performs **car-following only**:
 a CAV brakes behind a vehicle travelling the same way in its lane, in a merging
 lane or in a lane that diverges from it. **Crossing conflicts are resolved only by
-the arbiter**, as in the CoDrivingLLM benchmark. With `params: {safety: full}` in a
+the arbiter**, as in the CoDrivingLLM benchmark. The following gap is measured
+from noisy positions, so it includes a margin of 2·√2·σ (4.2 m at high noise) that
+stops position errors from letting a CAV creep into the car ahead. With `params: {safety: full}` in a
 config, CAVs also brake for any vehicle physically on their path ahead, including
 crossing traffic; this stronger layer can hide arbitration errors.
 
@@ -108,7 +134,7 @@ cavbench/
   geometry.py    routes as polylines, meeting points
   runner.py      one episode with matched seeds
 configs/         experiment configurations (YAML)
-experiments/     run_experiment.py, rollout_sensitivity.py
+experiments/     run_experiment.py, rollout_sensitivity.py, watch.py (graphics)
 analysis/        statistics.ipynb
 docs/            fuzzy_layer.md
 tests/           pytest suite

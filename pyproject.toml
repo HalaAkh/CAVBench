@@ -16,6 +16,7 @@ dependencies = ["highway-env>=1.10", "gymnasium>=1.0", "numpy>=1.26", "scipy>=1.
 [project.optional-dependencies]
 llm = ["openai>=1.40"]
 dev = ["pytest>=8.0", "matplotlib>=3.8", "jupyter"]
+video = ["imageio>=2.30", "imageio-ffmpeg>=0.4"]
 
 [tool.setuptools.packages.find]
 include = ["cavbench*"]

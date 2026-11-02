@@ -54,6 +54,10 @@ class FollowingSafety:
     vehicle_length: float = 5.0
 
     leader_range: float = 30.0  # same leader rule as the what-if rollouts
+    noise_k: float = 2.0  # gaps are measured from two noisy positions: keep
+                          # noise_k * sqrt(2) * sigma_pos extra distance (1.4 m at
+                          # medium noise, 4.2 m at high noise), so that position
+                          # errors cannot make a CAV creep into its leader
 
     def cap(self, obs: SceneObservation, vid: int) -> int:
         me = obs.states[vid]
@@ -76,7 +80,7 @@ class FollowingSafety:
             elif dist < self.leader_range and is_leader(
                     route_relation(me.path, other.path)[1], me.s, other.s):
                 gap = min(gap, dist - self.vehicle_length)
-        desired = self.s0 + me.speed * self.time_gap
+        desired = self.s0 + me.speed * self.time_gap + self.noise_k * np.sqrt(2.0) * obs.sigma_pos
         if gap < desired:
             return SLOWER
         if gap < desired + me.speed * 1.0:

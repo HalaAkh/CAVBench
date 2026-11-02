@@ -19,7 +19,7 @@ from highway_env import utils
 from highway_env.envs.common.abstract import AbstractEnv
 from highway_env.road.lane import LineType, StraightLane
 from highway_env.road.regulation import RegulatedRoad
-from highway_env.road.road import RoadNetwork
+from highway_env.road.road import Road, RoadNetwork
 
 from .base import ARBITRATION_DEFAULTS, ArbitrationEnvMixin
 
@@ -50,7 +50,7 @@ class CAVMergeEnv(ArbitrationEnvMixin, AbstractEnv):
                 },
                 "controlled_vehicles": 4,
                 "n_hdv": 6,
-                "duration": 40,
+                "duration": 50,  # [s] as the intersection
                 "policy_frequency": 5,
                 "simulation_frequency": 15,
                 "speed_limit": 12.0,
@@ -62,6 +62,7 @@ class CAVMergeEnv(ArbitrationEnvMixin, AbstractEnv):
                 "centering_position": [0.6, 0.5],
                 "scaling": 4.0,
                 "show_trajectories": False,
+                "hdv_yield_at_merge": False,
             }
         )
         return config
@@ -77,7 +78,11 @@ class CAVMergeEnv(ArbitrationEnvMixin, AbstractEnv):
                                             line_types=[c, c], priority=1, speed_limit=vmax))
         net.add_lane("j", "b", StraightLane(RAMP_START, [MERGE_X, 0], line_types=[c, c],
                                             priority=0, speed_limit=vmax))
-        self.road = RegulatedRoad(network=net, np_random=self.np_random,
+        # Human drivers follow IDM only, exactly as in the what-if rollouts.
+        # HighwayEnv's RegulatedRoad would make ramp drivers stop to yield where
+        # the ramp already overlaps the main lane, blocking it.
+        road_cls = RegulatedRoad if self.config["hdv_yield_at_merge"] else Road
+        self.road = road_cls(network=net, np_random=self.np_random,
                                   record_history=self.config["show_trajectories"],
                                   neighbour_vehicles_connected_lanes=True)
 
@@ -102,10 +107,16 @@ class CAVMergeEnv(ArbitrationEnvMixin, AbstractEnv):
         v0 = self.config["cav_initial_speed"]
         for ego_id in range(self.config["controlled_vehicles"]):
             lane_index = roads[ego_id % 2]
-            for _ in range(50):
-                d = rng.uniform(lo, hi)
-                if self._free(lane_index, d):
-                    break
+            target = rng.uniform(lo, hi)
+            if not self._free(lane_index, target):
+                # Nearest free spot on the lane (never place two vehicles on top
+                # of each other; this used to happen when 50 random draws failed).
+                length = self.road.network.get_lane(lane_index).length
+                spots = [d for d in np.arange(lo, length - 5.0, 0.5) if self._free(lane_index, d)]
+                if not spots:
+                    raise RuntimeError("no free starting position for a CAV in the merge scenario")
+                target = min(spots, key=lambda d: abs(d - target))
+            d = target
             ego = self._place(lane_index, d, v0, self.action_type.vehicle_class)
             ego.plan_route_to("c")
             ego.speed_index = ego.speed_to_index(v0)

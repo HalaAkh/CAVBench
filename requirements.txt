@@ -8,5 +8,7 @@ pyyaml>=6.0
 matplotlib>=3.8
 pytest>=8.0
 jupyter
+imageio>=2.30        # saving videos in experiments/watch.py
+imageio-ffmpeg>=0.4
 # optional, only for the LLM baseline:
 # openai>=1.40
