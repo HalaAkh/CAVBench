@@ -7,3 +7,5 @@ results/*.csv
 analysis/figures/
 *.egg-info/
 third_party/CoDrivingLLM/
+results/llm_cache/
+videos/
