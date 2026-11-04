@@ -27,6 +27,8 @@ class Path:
 
     points: np.ndarray  # (P, 2)
     key: tuple = ()
+    lane_ends: np.ndarray | None = None  # arc length at the end of each lane of the route
+    lane_priority: np.ndarray | None = None  # road priority of each lane (HighwayEnv's)
     s: np.ndarray = field(init=False)  # (P,) arc length of each point
     tangents: np.ndarray = field(init=False)  # (P, 2) unit tangent at each point
 
@@ -46,6 +48,14 @@ class Path:
     @property
     def length(self) -> float:
         return float(self.s[-1])
+
+    def priority_at(self, s: np.ndarray) -> np.ndarray:
+        """Road priority of the lane at arc length ``s`` (0 if unknown)."""
+        s = np.asarray(s, dtype=float)
+        if self.lane_priority is None:
+            return np.zeros(s.shape)
+        idx = np.minimum(np.searchsorted(self.lane_ends, s, side="right"), len(self.lane_ends) - 1)
+        return self.lane_priority[idx]
 
     def project(self, xy: np.ndarray) -> tuple[float, float]:
         """Map-match a 2-D point: return (arc length, lateral distance)."""
@@ -80,8 +90,14 @@ class Path:
 
 
 def remaining_route(vehicle) -> list:
-    """Lanes the vehicle will still drive on, starting with its current lane."""
-    current = vehicle.lane_index
+    """Lanes the vehicle will still drive on, starting with its current lane.
+
+    The lane the vehicle is *following* (``target_lane_index``) is used rather
+    than the closest lane (``lane_index``): where several lanes start at the
+    same point, e.g. straight on and left turn at the entry of the
+    intersection, HighwayEnv's closest lane can be one the vehicle is not on.
+    """
+    current = getattr(vehicle, "target_lane_index", None) or vehicle.lane_index
     route = list(getattr(vehicle, "route", None) or [])
     for i, lane in enumerate(route):
         if lane[:2] == current[:2]:
@@ -101,8 +117,12 @@ class PathCache:
         lanes = remaining_route(vehicle)
         key = tuple((a, b) for a, b, *_ in lanes)
         if key not in self._paths:
-            pts = [lane_polyline(self.network.get_lane((a, b, 0)), self.step) for a, b in key]
-            self._paths[key] = Path(np.concatenate(pts, axis=0), key=key)
+            lanes = [self.network.get_lane((a, b, 0)) for a, b in key]
+            pts = [lane_polyline(lane, self.step) for lane in lanes]
+            self._paths[key] = Path(
+                np.concatenate(pts, axis=0), key=key,
+                lane_ends=np.cumsum([lane.length for lane in lanes]),
+                lane_priority=np.array([float(getattr(lane, "priority", 0)) for lane in lanes]))
         return self._paths[key]
 
 

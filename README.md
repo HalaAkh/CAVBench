@@ -129,13 +129,20 @@ simulator, see `third_party/README.md`.
 Every 0.2 s:
 
 1. **Observe** the shared states with noise: ŝᵢ = sᵢ + εᵢ, εᵢ ~ N(0, σ²).
-2. **Detect conflicts:** routes that meet, with ΔTTCP = |dᵢ/vᵢ − dⱼ/vⱼ| < 8 s.
+2. **Detect conflicts:** routes that meet, with ΔTTCP = |dᵢ/vᵢ − dⱼ/vⱼ| < 8 s. A vehicle
+   counts as past a conflict point only once it is 4.5 m + 2σ beyond it, so position
+   noise cannot make a conflict disappear for a moment.
 3. **Candidate maneuvers:** one per conflicting CAV (it goes, the others yield),
    plus the fallback (everyone yields).
 4. **What-if rollouts:** N = 100 simulations of each maneuver over T = 4 s, starting
-   from the shared states plus imagined errors; human drivers follow IDM.
-5. **Risk and uncertainty:** R̂ₖ = share of rollouts in which two vehicles come within
-   2 m (three-circle footprints); Uₖ = std of the closest gap / 5 m.
+   from the shared states plus imagined errors of at least σ_min (0.5 m, 0.3 m/s),
+   so that the futures differ even with perfect perception. Human drivers follow IDM
+   with their own desired speed in each rollout, and each one may give way: with
+   probability 0.5 it follows the road's priority rule (stops when a conflict with a
+   higher-priority or leading vehicle is predicted within 3 s), otherwise it drives on.
+5. **Risk and uncertainty:** R̂ₖ = share of rollouts that are dangerous: two vehicles
+   come within 2 m (three-circle footprints) **or** pass a conflict area less than
+   1.5 s apart (PET, as in the evaluation); Uₖ = std of the closest gap / 5 m.
 6. **Fuzzy decision:** 13 Mamdani rules over risk, uncertainty and waiting time give
    an acceptability Aₖ; > 0.7 accept, 0.4–0.7 proceed cautiously, ≤ 0.4 fall back.
    Ties go to the vehicle that arrives first, and "k goes" includes the CAVs queued

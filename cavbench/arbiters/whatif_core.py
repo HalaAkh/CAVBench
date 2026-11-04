@@ -41,7 +41,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..conflicts import ConflictGroup
-from ..geometry import route_relation
+from ..geometry import meeting_points, route_relation
 from .commitment import platoon_ahead
 from ..state import SceneObservation
 
@@ -71,6 +71,22 @@ class RolloutConfig:
     leader_range: float = 30.0
     context_radius: float = 60.0  # vehicles this close to a member are simulated too
     common_random_numbers: bool = True
+    # Uncertainty floor (change 1)
+    sigma_pos_min: float = 0.5  # [m]
+    sigma_vel_min: float = 0.3  # [m/s]
+    hdv_speed_sd: float = 1.0  # [m/s] spread of human drivers' desired speed
+    # Danger = clearance OR time gap at the conflict area (change 2)
+    pet_safe: float = 1.5  # [s]; 0 disables the PET criterion
+    zone_radius: float = 3.0  # [m] conflict area, as in the PET metric
+    # Human drivers who give way (change 3)
+    p_hdv_yield: float = 0.5  # probability that a human driver follows the priority rule
+    yield_check: float = 0.5  # [s] how often the rule is re-checked
+    yield_horizon: float = 3.0  # [s] constant-speed prediction horizon of the rule
+    yield_distance: float = 5.0  # [m] predicted centre distance counted as a conflict
+    # Speed-up (change 4): skip pairs that cannot meet within the horizon
+    prune_pairs: bool = True
+    prune_margin: float = 8.0  # [m]
+    exact_range: float = 12.0  # [m] exact footprint clearance below this centre distance
 
     @property
     def steps(self) -> int:
@@ -92,8 +108,9 @@ _TABLE_CACHE: dict[tuple, np.ndarray] = {}
 def _route_table(paths) -> np.ndarray:
     """Stack, for each route, positions and tangents every GRID_DS metres.
 
-    Shape (M, G, 4) with columns x, y, tx, ty; shorter routes are padded with
-    their last row, which reproduces np.interp's clamping at the route end.
+    Shape (M, G, 5) with columns x, y, tx, ty, lane priority; shorter routes are
+    padded with their last row, which reproduces np.interp's clamping at the
+    route end.
     """
     rows = []
     for p in paths:
@@ -102,14 +119,51 @@ def _route_table(paths) -> np.ndarray:
             xy = p.position(sg)
             t = np.stack([np.interp(sg, p.s, p.tangents[:, 0]),
                           np.interp(sg, p.s, p.tangents[:, 1])], axis=-1)
-            _TABLE_CACHE[p.key] = np.concatenate([xy, t], axis=-1)
+            _TABLE_CACHE[p.key] = np.concatenate([xy, t, p.priority_at(sg)[:, None]], axis=-1)
         rows.append(_TABLE_CACHE[p.key])
     g = max(len(r) for r in rows) + 1
-    out = np.empty((len(rows), g, 4))
+    out = np.empty((len(rows), g, 5), dtype=np.float32)
     for m, r in enumerate(rows):
         out[m, :len(r)] = r
         out[m, len(r):] = r[-1]
     return out
+
+
+_ZONE_CACHE: dict[tuple, tuple | None] = {}
+
+
+def _conflict_zone(pa, pb, radius: float):
+    """Arc-length intervals [enter, exit] on routes a and b of the conflict
+    area: a disk of ``radius`` around the first point where the routes meet
+    (the same area as the PET metric). None if they do not meet, or if they
+    start on the same lane (car following, not a conflict)."""
+    key = (pa.key, pb.key, radius)
+    if key not in _ZONE_CACHE:
+        out = None
+        if pa.key[:1] != pb.key[:1]:
+            mps = meeting_points(pa, pb, 1.0)
+            if mps:
+                point = pa.position(mps[0].s_i)
+                out = (_interval(pa, point, radius), _interval(pb, point, radius))
+                if out[0] is None or out[1] is None:
+                    out = None
+        _ZONE_CACHE[key] = out
+    return _ZONE_CACHE[key]
+
+
+def _interval(path, point, radius):
+    d = np.hypot(*(path.points - point[None, :]).T)
+    inside = d < radius
+    if not inside.any():
+        return None
+    i = int(np.argmin(d))
+    a = i
+    while a > 0 and inside[a - 1]:
+        a -= 1
+    b = i
+    while b < len(d) - 1 and inside[b + 1]:
+        b += 1
+    return float(path.s[a]), float(path.s[b])
 
 
 def _involved(obs: SceneObservation, group: ConflictGroup, radius: float) -> list[int]:
@@ -159,12 +213,20 @@ def evaluate_options(
 
     # Initial states with imagined errors eta.
     shape = (1 if cfg.common_random_numbers else K, N, M)
-    eta_s = rng.normal(0.0, obs.sigma_pos, size=shape)
-    eta_v = rng.normal(0.0, obs.sigma_vel, size=shape)
+    sig_p = max(obs.sigma_pos, cfg.sigma_pos_min)
+    sig_v = max(obs.sigma_vel, cfg.sigma_vel_min)
+    eta_s = rng.normal(0.0, sig_p, size=shape)
+    eta_v = rng.normal(0.0, sig_v, size=shape)
+    is_hdv = roles[0] == HDV
+    # Human drivers: own desired speed per rollout; do they follow the priority rule?
+    hdv_speed = v_target[0][None, None, :] + cfg.hdv_speed_sd * rng.normal(size=(1, N, M)) * is_hdv
+    v_target_b = np.where(is_hdv[None, None, :], np.maximum(hdv_speed, 2.0),
+                          v_target[:, None, :])  # (K or 1, N, M)
+    complies = (rng.random(size=(1, N, M)) < cfg.p_hdv_yield) & is_hdv
     s0 = np.array([st.s for st in states])
     v0 = np.array([st.speed for st in states])
-    s = np.broadcast_to(s0 + eta_s, (K, N, M)).copy()
-    v = np.maximum(np.broadcast_to(v0 + eta_v, (K, N, M)), 0.0).copy()
+    s = np.broadcast_to(s0 + eta_s, (K, N, M)).astype(np.float32)
+    v = np.maximum(np.broadcast_to(v0 + eta_v, (K, N, M)), 0.0).astype(np.float32)
 
     # Only vehicles whose routes meet (crossing, merging or following on the
     # same lane) can collide; parallel lanes 4 m apart must not count.
@@ -188,12 +250,63 @@ def evaluate_options(
     relevant = relevant | relevant.T
     pair_mask = np.triu((member[:, None] | member[None, :]) & relevant)
     ia, ib = np.nonzero(pair_mask)
-    offsets = np.asarray(cfg.circle_offsets)
+    # Speed-up: drop crossing pairs that cannot meet within the horizon (one of
+    # them is too far from the conflict area to reach it, or left it long ago).
+    if len(ia) and cfg.prune_pairs:
+        v_lim = max(obs.v_max, cfg.hdv_desired_speed + 3 * cfg.hdv_speed_sd)
+        reach = np.maximum(v0, v_lim) * cfg.horizon + 3 * sig_p + cfg.prune_margin
+        past = np.maximum(v0, 1.0) * max(cfg.pet_safe, 1.0) + 3 * sig_p + cfg.prune_margin
+        keep = np.ones(len(ia), dtype=bool)
+        for n, (a, b) in enumerate(zip(ia, ib)):
+            if shared[a, b] or shared[b, a]:
+                continue  # same lane / merging: can meet anywhere along it
+            z = _conflict_zone(paths[a], paths[b], cfg.zone_radius)
+            if z is None:
+                continue
+            (ea, xa), (eb, xb) = z
+            if (ea - s0[a] > reach[a] or eb - s0[b] > reach[b]
+                    or s0[a] - xa > past[a] or s0[b] - xb > past[b]):
+                keep[n] = False
+        ia, ib = ia[keep], ib[keep]
+    offsets = np.asarray(cfg.circle_offsets, dtype=np.float32)
     sqrt_ab = 2.0 * np.sqrt(cfg.idm_a * cfg.idm_b)
     d_min = np.full((K, N), np.inf)
     roles_b = roles[:, None, :]
-    vt_b = v_target[:, None, :]
+    is_go, is_yield, is_free = roles_b == GO, roles_b == YIELD, roles_b == FREE_CAV
+    vt_b = np.broadcast_to(v_target_b, (K, N, M))
     v_max = obs.v_max
+
+    # Conflict areas of the pairs, for the PET criterion.
+    use_pet = cfg.pet_safe > 0 and len(ia) > 0
+    if use_pet:
+        zones = [_conflict_zone(paths[a], paths[b], cfg.zone_radius) for a, b in zip(ia, ib)]
+        zp = np.array([z is not None for z in zones])
+        za, zb = ia[zp], ib[zp]
+        use_pet = len(za) > 0
+    if use_pet:
+        zones = [z for z in zones if z is not None]
+        enter_a = np.array([z[0][0] for z in zones]); exit_a = np.array([z[0][1] for z in zones])
+        enter_b = np.array([z[1][0] for z in zones]); exit_b = np.array([z[1][1] for z in zones])
+
+        def crossing_times(s_now, v_now, enter, exit_):
+            """Initial (possibly past, negative) entry and exit times."""
+            vv = np.maximum(v_now, 1.0)
+            t_in = np.where(s_now >= enter, -(s_now - enter) / vv, np.nan)
+            t_out = np.where(s_now >= exit_, -(s_now - exit_) / vv, np.nan)
+            return t_in, t_out
+
+        tin_a, tout_a = crossing_times(s[..., za], v[..., za], enter_a, exit_a)
+        tin_b, tout_b = crossing_times(s[..., zb], v[..., zb], enter_b, exit_b)
+
+    # Pairs for the human drivers' give-way rule: a human driver h and any
+    # vehicle o whose route meets h's.
+    use_yield = cfg.p_hdv_yield > 0 and is_hdv.any()
+    if use_yield:
+        yh, yo = np.nonzero(is_hdv[:, None] & relevant & ~np.eye(M, dtype=bool))
+        use_yield = len(yh) > 0
+        check_every = max(int(round(cfg.yield_check / cfg.dt)), 1)
+        t_pred = np.arange(0.25, cfg.yield_horizon, 0.25)
+        yielding = np.zeros((K, N, M), dtype=bool)
 
     # Directed pairs (follower fi, candidate leader lj) on a shared stretch,
     # grouped by follower so that per-follower minima use np.minimum.reduceat.
@@ -220,14 +333,26 @@ def evaluate_options(
         active = s < path_len  # vehicles leave the scene at the end of their route
 
         if len(ia):  # footprint clearance of the relevant pairs (three-circle model)
-            cx_a = x[..., ia, None] + tx[..., ia, None] * offsets
-            cy_a = y[..., ia, None] + ty[..., ia, None] * offsets
-            cx_b = x[..., ib, None] + tx[..., ib, None] * offsets
-            cy_b = y[..., ib, None] + ty[..., ib, None] * offsets
-            cd = np.hypot(cx_a[..., :, None] - cx_b[..., None, :],
-                          cy_a[..., :, None] - cy_b[..., None, :])
-            clearance = cd.min(axis=(-1, -2)) - 2.0 * cfg.circle_radius
-            clearance = np.where(active[..., ia] & active[..., ib], clearance, np.inf)
+            # Centre distance first; the exact three-circle clearance is only
+            # computed for pairs that are within `exact_range` in some rollout
+            # (farther apart, clearance >= centre distance - 5 m > d_safe, and
+            # the middle-circle distance is used).
+            both = active[..., ia] & active[..., ib]
+            dcx, dcy = x[..., ia] - x[..., ib], y[..., ia] - y[..., ib]
+            dc = np.sqrt(dcx * dcx + dcy * dcy)
+            clearance = dc - 2.0 * cfg.circle_radius
+            near = ((dc < cfg.exact_range) & both).any(axis=(0, 1))
+            if near.any():
+                na, nb = ia[near], ib[near]
+                cx_a = x[..., na, None] + tx[..., na, None] * offsets
+                cy_a = y[..., na, None] + ty[..., na, None] * offsets
+                cx_b = x[..., nb, None] + tx[..., nb, None] * offsets
+                cy_b = y[..., nb, None] + ty[..., nb, None] * offsets
+                ddx = cx_a[..., :, None] - cx_b[..., None, :]
+                ddy = cy_a[..., :, None] - cy_b[..., None, :]
+                cd2 = (ddx * ddx + ddy * ddy).reshape(ddx.shape[:-2] + (-1,)).min(axis=-1)
+                clearance[..., near] = np.sqrt(cd2) - 2.0 * cfg.circle_radius
+            clearance = np.where(both, clearance, np.inf)
             d_min = np.minimum(d_min, clearance.min(axis=-1))
         if step == cfg.steps:
             break
@@ -248,25 +373,61 @@ def evaluate_options(
             interaction[..., followers] = np.minimum.reduceat(term, seg, axis=-1)
             has_leader[..., followers] = np.logical_or.reduceat(lead, seg, axis=-1)
 
+        # Human drivers' give-way rule (re-checked every yield_check seconds).
+        if use_yield and step % check_every == 0:
+            sp = s[..., :, None] + v[..., :, None] * t_pred  # (K, N, M, P) constant speed
+            up = np.clip(sp / GRID_DS, 0.0, g_max - 1e-9).astype(np.int64)
+            px = table[np.arange(M)[None, None, :, None], up, 0]
+            py = table[np.arange(M)[None, None, :, None], up, 1]
+            close = (np.hypot(px[..., yh, :] - px[..., yo, :], py[..., yh, :] - py[..., yo, :])
+                     < cfg.yield_distance).any(axis=-1)
+            prio = table[m_idx, i0, 4]
+            ph, po = prio[..., yh], prio[..., yo]
+            # equal priority: the one behind (in the other's frame) gives way
+            dx, dy = x[..., yo] - x[..., yh], y[..., yo] - y[..., yh]
+            ahead_of_h = dx * tx[..., yh] + dy * ty[..., yh]  # o's distance in front of h
+            ahead_of_o = -(dx * tx[..., yo] + dy * ty[..., yo])
+            h_gives_way = (ph < po) | ((ph == po) & (ahead_of_h > ahead_of_o))
+            must = close & h_gives_way & active[..., yh] & active[..., yo]
+            yielding = np.zeros((K, N, M), dtype=bool)
+            np.logical_or.at(yielding, (slice(None), slice(None), yh), must)
+            yielding &= complies
+
         # Commanded acceleration by role.
         a_go = np.minimum(cfg.kp * (v_max - v), cfg.a_go)
         a_yield = np.maximum(cfg.kp * (0.0 - v), cfg.a_yield)
         a_free = np.clip(cfg.kp * (vt_b - v), cfg.a_yield, cfg.a_go)
-        a_hdv = cfg.idm_a * (1.0 - (v / np.maximum(vt_b, 0.1)) ** cfg.idm_delta) + interaction
-        a_cmd = np.select(
-            [roles_b == GO, roles_b == YIELD, roles_b == FREE_CAV], [a_go, a_yield, a_free], a_hdv
-        )
+        vt_h = np.where(yielding, 0.01, vt_b) if use_yield else vt_b
+        a_hdv = cfg.idm_a * (1.0 - (v / np.maximum(vt_h, 0.01)) ** cfg.idm_delta) + interaction
+        a_cmd = np.where(is_go, a_go, np.where(is_yield, a_yield, np.where(is_free, a_free, a_hdv)))
         a_follow = np.where(has_leader, cfg.idm_a + interaction, np.inf)
         a = np.where(roles_b == HDV, a_cmd, np.minimum(a_cmd, a_follow))
         a = np.maximum(a, cfg.a_min)
         v = np.maximum(v + a * cfg.dt, 0.0)
         s = s + v * cfg.dt
+        if use_pet:
+            t_now = (step + 1) * cfg.dt
+            sa, sb = s[..., za], s[..., zb]
+            tin_a = np.where(np.isnan(tin_a) & (sa >= enter_a), t_now, tin_a)
+            tout_a = np.where(np.isnan(tout_a) & (sa >= exit_a), t_now, tout_a)
+            tin_b = np.where(np.isnan(tin_b) & (sb >= enter_b), t_now, tin_b)
+            tout_b = np.where(np.isnan(tout_b) & (sb >= exit_b), t_now, tout_b)
 
     d_min = np.where(np.isfinite(d_min), d_min, 100.0)
+    danger = d_min < cfg.d_safe
+    if use_pet:
+        # PET when both vehicles enter the area and the second enters in the
+        # future (past events cannot be changed by the decision).
+        a_first = np.where(np.isnan(tin_b), True, tin_a <= tin_b)
+        t_in2 = np.where(a_first, tin_b, tin_a)
+        t_out1 = np.where(a_first, tout_a, tout_b)
+        both = ~np.isnan(tin_a) & ~np.isnan(tin_b) & (t_in2 >= 0)
+        pet = np.where(np.isnan(t_out1), 0.0, t_in2 - t_out1)  # first still inside: overlap
+        danger |= (both & (pet < cfg.pet_safe)).any(axis=-1)
     out = []
     goers = list(group.cavs) + ([None] if include_fallback else [])
     for k, cav in enumerate(goers):
         dk = d_min[k]
-        out.append(OptionResult(cav, float(np.mean(dk < cfg.d_safe)),
+        out.append(OptionResult(cav, float(np.mean(danger[k])),
                                 float(np.std(dk) / cfg.u_scale), dk))
     return out

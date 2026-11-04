@@ -31,6 +31,9 @@ class ConflictConfig:
                                 # a vehicle blocks the point until it is this far past it
     min_speed: float = 1.0  # [m/s] floor used in TTCP = d / v
     include_hdv: bool = True  # CAV-HDV conflicts form groups of their own
+    noise_k: float = 2.0  # a vehicle counts as past the point only if it is
+                          # passed_margin + noise_k * sigma_pos beyond it, so that
+                          # position noise cannot make a conflict flicker off
 
 
 @dataclass
@@ -77,11 +80,12 @@ class ConflictDetector:
             self._cache[key] = meeting_points(a.path, b.path, self.cfg.meet_distance)
         return self._cache[key]
 
-    def pair(self, a: SharedState, b: SharedState) -> Conflict | None:
+    def pair(self, a: SharedState, b: SharedState, sigma_pos: float = 0.0) -> Conflict | None:
         cfg = self.cfg
+        margin = cfg.passed_margin + cfg.noise_k * sigma_pos
         for mp in self._meetings(a, b):
             d_a, d_b = mp.s_i - a.s, mp.s_j - b.s
-            if d_a < -cfg.passed_margin or d_b < -cfg.passed_margin:
+            if d_a < -margin or d_b < -margin:
                 continue  # this meeting point is behind one of them
             if mp.s_i < 1e-6 and mp.s_j < 1e-6:
                 continue  # routes start together: same approach, car following
@@ -105,14 +109,14 @@ class ConflictDetector:
             for b in cavs[idx + 1 :]:
                 if a.path.key[0] == b.path.key[0]:
                     continue  # same current lane: car following (benchmark rule)
-                c = self.pair(a, b)
+                c = self.pair(a, b, obs.sigma_pos)
                 if c:
                     out.append(c)
             if self.cfg.include_hdv:
                 for b in others:
                     if b.is_cav or a.path.key[0] == b.path.key[0]:
                         continue
-                    c = self.pair(a, b)
+                    c = self.pair(a, b, obs.sigma_pos)
                     if c:
                         out.append(c)
         return out
