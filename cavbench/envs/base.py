@@ -4,7 +4,10 @@
 
 * a vehicle class for CAVs whose acceleration is physically bounded;
 * trajectory recording at the simulation frequency (15 Hz), used for PET;
-* the noisy shared view of the scene (:meth:`observe`) given to arbiters;
+* the noisy shared view of the scene (:meth:`observe`) given to arbiters,
+  optionally passed through a V2X channel with message delay and packet loss
+  (``v2x_level`` / ``v2x_delay`` / ``v2x_loss``; ideal by default):
+  true states -> [V2X: delay + loss] -> [Gaussian noise] -> arbiter;
 * stable integer ids for vehicles, and the benchmark's termination rules.
 """
 from __future__ import annotations
@@ -14,7 +17,7 @@ from highway_env.envs.common.abstract import AbstractEnv
 from highway_env.vehicle.controller import MDPVehicle
 
 from ..geometry import PathCache, remaining_route
-from ..noise import GaussianNoise
+from ..noise import GaussianNoise, V2XChannel
 from ..state import SceneObservation, SharedState
 
 
@@ -37,6 +40,9 @@ ARBITRATION_DEFAULTS = {
     "sigma_pos": None,
     "sigma_vel": None,
     "assumed_noise": None,  # noise the arbiter assumes (None = the true noise)
+    "v2x_level": None,  # one of V2X_LEVELS, or set v2x_delay / v2x_loss (None = ideal)
+    "v2x_delay": None,  # [s]
+    "v2x_loss": None,  # packet-loss probability
     "spawn_during_episode": False,
     "cav_acc_limits": [-5.0, 3.0],
     "cav_initial_speed": 5.0,
@@ -65,6 +71,14 @@ class ArbitrationEnvMixin:
             return self.noise
         return GaussianNoise.from_level(a) if isinstance(a, str) else GaussianNoise(*a)
 
+    def _make_v2x(self) -> V2XChannel:
+        c = self.config
+        if c.get("v2x_delay") is not None or c.get("v2x_loss") is not None:
+            return V2XChannel(c.get("v2x_delay") or 0.0, c.get("v2x_loss") or 0.0)
+        if c.get("v2x_level") is not None:
+            return V2XChannel.from_level(c["v2x_level"])
+        return V2XChannel()
+
     @property
     def cav_target_speeds(self) -> tuple[float, ...]:
         cfg = self.config["action"].get("action_config", self.config["action"])
@@ -90,6 +104,8 @@ class ArbitrationEnvMixin:
         self.trajectory: list[tuple] = []
         self.arrived_vids: set[int] = set()
         self.sim_time = 0.0
+        self.v2x = self._make_v2x()
+        self.v2x.reset()
         self._record()
 
     def vid(self, vehicle) -> int:
@@ -102,6 +118,9 @@ class ArbitrationEnvMixin:
         return self._vid[key]
 
     def _record(self) -> None:
+        if not self.v2x.is_ideal:  # every vehicle broadcasts its true state (15 Hz)
+            for v in self.road.vehicles:
+                self.v2x.record(self.sim_time, self.vid(v), v.position, v.speed)
         if not self.config["record_trajectories"]:
             return
         for v in self.road.vehicles:
@@ -176,6 +195,9 @@ class ArbitrationEnvMixin:
         vehicles = list(self.road.vehicles)
         pos = np.array([v.position for v in vehicles], dtype=float).reshape(-1, 2)
         spd = np.array([v.speed for v in vehicles], dtype=float)
+        ages = np.zeros(len(vehicles))
+        if not self.v2x.is_ideal:  # delayed / lost messages, before the noise
+            pos, spd, ages = self.v2x.receive(self.sim_time, [self.vid(v) for v in vehicles], rng)
         noisy_pos, noisy_spd = self.noise.perturb(pos, spd, rng)
         states = {}
         for v, p, sp in zip(vehicles, noisy_pos, noisy_spd):
@@ -193,6 +215,7 @@ class ArbitrationEnvMixin:
             sigma_pos=assumed.sigma_pos, sigma_vel=assumed.sigma_vel,
             cav_target_speeds=self.cav_target_speeds,
             policy_dt=1.0 / self.config["policy_frequency"],
+            extra={"v2x_age": {self.vid(v): float(a) for v, a in zip(vehicles, ages)}},
         )
 
     def cav_vids(self) -> list[int]:

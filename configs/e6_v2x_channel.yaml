@@ -1,0 +1,21 @@
+# E6: effect of the V2X channel (message delay + packet loss) on the arbiters.
+# V2X levels (delay [s], loss probability): ideal (0, 0), typical (0.1, 0.1),
+# degraded (0.3, 0.3) -- proposals, see cavbench/noise/v2x.py.
+name: e6_v2x_channel
+episodes: 200
+seed_offset: 0
+noise_levels: [none, high]
+scenarios:
+  - label: intersection_v2x_ideal
+    scenario: intersection
+    env: {v2x_level: ideal}
+  - label: intersection_v2x_typical
+    scenario: intersection
+    env: {v2x_level: typical}
+  - label: intersection_v2x_degraded
+    scenario: intersection
+    env: {v2x_level: degraded}
+arbiters:
+  - {label: UCRA, kind: whatif_fuzzy}
+  - {label: FCFS, kind: fcfs}
+  - {label: NoCoord, kind: no_coordination}
