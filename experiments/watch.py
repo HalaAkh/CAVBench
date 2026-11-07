@@ -7,6 +7,7 @@ what happens in a single episode, or to save it as a video:
     python experiments/watch.py --arbiter fcfs --noise high --seed 3
     python experiments/watch.py --scenario intersection_dense --seed 7
     python experiments/watch.py --scenario merge
+    python experiments/watch.py --v2x degraded --seed 3          # delayed / lost V2X messages
     python experiments/watch.py --seed 3 --save videos/ucra_seed3.mp4   # or .gif
 
 The episode is exactly the one the experiments run for the same scenario,
@@ -235,6 +236,8 @@ def main(argv=None) -> None:
     p.add_argument("--scenario", default="intersection", choices=list(SCENARIOS))
     p.add_argument("--arbiter", default="ucra", choices=list(ARBITERS))
     p.add_argument("--noise", default="high", choices=["none", "low", "medium", "high"])
+    p.add_argument("--v2x", default="ideal", choices=["ideal", "typical", "degraded"],
+                   help="V2X channel: message delay and packet loss (default: ideal)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--save", default=None, help="save to .mp4 or .gif instead of opening a window")
     p.add_argument("--speed", type=float, default=1.0, help="playback speed (window only)")
@@ -249,7 +252,7 @@ def main(argv=None) -> None:
     scenario, env_cfg = SCENARIOS[a.scenario]
     view = dict(VIEW[scenario])
     camera = view.pop("camera")
-    env = make_env(scenario, {**env_cfg, **view, "noise_level": a.noise,
+    env = make_env(scenario, {**env_cfg, **view, "noise_level": a.noise, "v2x_level": a.v2x,
                               "show_trajectories": not a.no_trails}, render_mode="rgb_array")
     kind, params, title = ARBITERS[a.arbiter]
     arbiter = make_arbiter(kind, **params)
@@ -282,7 +285,7 @@ def main(argv=None) -> None:
     else:
         banner = "TIMEOUT"
     keys = ("success", "collision", "severe_conflicts", "min_pet", "avg_speed", "episode_time")
-    print(f"{a.scenario} | {title} | noise {a.noise} | seed {a.seed}")
+    print(f"{a.scenario} | {title} | noise {a.noise} | v2x {a.v2x} | seed {a.seed}")
     print("  " + "  ".join(f"{k}={m[k]:.2f}" if isinstance(m.get(k), float) else f"{k}={m.get(k)}"
                            for k in keys if k in m))
     if not w.closed:

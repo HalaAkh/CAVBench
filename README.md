@@ -148,6 +148,45 @@ Every 0.2 s:
    Ties go to the vehicle that arrives first, and "k goes" includes the CAVs queued
    ahead of k in its lane. See `docs/fuzzy_layer.md`.
 
+## V2X channel: delay and packet loss (optional)
+
+By default the shared states reach the arbiter instantly and without loss.
+An optional V2X channel models an imperfect radio link. It acts on the true
+states, **before** the Gaussian perception noise:
+
+```
+true states -> [V2X: delay + loss] -> [Gaussian noise] -> arbiter
+```
+
+* **Delay**: the arbiter receives each vehicle's newest message sent at least
+  `delay` seconds ago.
+* **Packet loss**: with probability `loss` the newest message is lost and the
+  arbiter keeps the last message it received from that vehicle (it gets older).
+
+| Level | delay | loss probability |
+|---|---|---|
+| ideal (default) | 0 s | 0 |
+| typical | 0.1 s | 0.1 |
+| degraded | 0.3 s | 0.3 |
+
+These values are proposals that still need a justification from the literature.
+Assumptions: every vehicle broadcasts at 15 Hz, the first message of each vehicle
+always arrives, and losses are independent.
+
+Use it through the env config, either with a level or with explicit values:
+
+```yaml
+env: {v2x_level: typical}               # ideal / typical / degraded
+env: {v2x_delay: 0.2, v2x_loss: 0.05}   # explicit values (override the level)
+```
+
+The age of the message used for each vehicle is available to arbiters in
+`obs.extra["v2x_age"]`. To watch an episode: `python experiments/watch.py --v2x degraded`.
+The experiment `configs/e6_v2x_channel.yaml` compares the three levels at the
+intersection. The loss randomness uses its own random generator, so the
+perception-noise samples stay matched across experiments, and the default (ideal)
+channel gives **identical results** to running without it.
+
 ## Low-level safety layer
 
 All arbiters share the same low-level layer, so that differences come from the
@@ -165,7 +204,7 @@ crossing traffic; this stronger layer can hide arbitration errors.
 ```
 cavbench/
   envs/          intersection.py, merge.py, base.py (noise, trajectories, termination)
-  noise/         gaussian.py (four noise levels)
+  noise/         gaussian.py (four noise levels), v2x.py (optional V2X delay + packet loss)
   arbiters/      whatif_core.py (rollouts), fuzzy.py, whatif_fuzzy.py (UCRA),
                  fcfs.py, no_coordination.py, codrivingllm_wrapper.py, commitment.py
   metrics/       safety.py (success, collisions, PET, speed)
