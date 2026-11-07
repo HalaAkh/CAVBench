@@ -1,21 +1,26 @@
 # E6: effect of the V2X channel (message delay + packet loss) on the arbiters.
-# V2X levels (delay [s], loss probability): ideal (0, 0), typical (0.1, 0.1),
-# degraded (0.3, 0.3) -- proposals, see cavbench/noise/v2x.py.
+# V2X levels (delay [s], loss probability): ideal (0, 0), typical (0.1, 0.1) =
+# the 3GPP requirement for V2X safety messages, degraded (0.3, 0.3) = a stress
+# case; see cavbench/noise/v2x.py. Every arbiter receives the messages after
+# dead reckoning (moved forward by speed x age); UCRA additionally widens the
+# rollout spread of each vehicle with the age of its message, and
+# UCRA-noAge is the ablation without that.
 name: e6_v2x_channel
 episodes: 200
 seed_offset: 0
 noise_levels: [none, high]
 scenarios:
-  - label: intersection_v2x_ideal
-    scenario: intersection
-    env: {v2x_level: ideal}
-  - label: intersection_v2x_typical
-    scenario: intersection
-    env: {v2x_level: typical}
-  - label: intersection_v2x_degraded
-    scenario: intersection
-    env: {v2x_level: degraded}
+  - {label: intersection_v2x_ideal, scenario: intersection, env: {v2x_level: ideal}}
+  - {label: intersection_v2x_typical, scenario: intersection, env: {v2x_level: typical}}
+  - {label: intersection_v2x_degraded, scenario: intersection, env: {v2x_level: degraded}}
+  - {label: intersection_dense_v2x_ideal, scenario: intersection,
+     env: {controlled_vehicles: 8, initial_vehicle_count: 14, v2x_level: ideal}}
+  - {label: intersection_dense_v2x_typical, scenario: intersection,
+     env: {controlled_vehicles: 8, initial_vehicle_count: 14, v2x_level: typical}}
+  - {label: intersection_dense_v2x_degraded, scenario: intersection,
+     env: {controlled_vehicles: 8, initial_vehicle_count: 14, v2x_level: degraded}}
 arbiters:
   - {label: UCRA, kind: whatif_fuzzy}
+  - {label: UCRA-noAge, kind: whatif_fuzzy, params: {rollout: {age_aware: false}}}
   - {label: FCFS, kind: fcfs}
   - {label: NoCoord, kind: no_coordination}

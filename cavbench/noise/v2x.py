@@ -29,8 +29,15 @@ from dataclasses import dataclass, field
 import numpy as np
 
 #: V2X levels: (delay [s], packet-loss probability).
-#: NOTE: these values are proposals; they still need a justification from the
-#: literature (e.g. measured DSRC / C-V2X latency and packet-delivery ratios).
+#: * typical = the 3GPP requirement for V2X safety messages (3GPP TR 22.885,
+#:   Release 14): at most 100 ms latency and at least 90% message reception
+#:   (90% for NLOS/urban roads, 95% at urban intersections), i.e. a link that
+#:   just meets the standard;
+#: * degraded = a stress case beyond the requirement (3x the latency budget,
+#:   30% loss), as seen with congestion or when buildings block the signal:
+#:   in a DSRC field test, packet reception at an NLOS intersection stayed
+#:   >= 90% only up to 320 m at 5 dBm (Bae et al., IEEE Access 9, 2021,
+#:   doi:10.1109/ACCESS.2020.3044358) and fell further beyond.
 V2X_LEVELS: dict[str, tuple[float, float]] = {
     "ideal": (0.0, 0.0),
     "typical": (0.1, 0.1),

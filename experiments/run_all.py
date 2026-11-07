@@ -1,6 +1,6 @@
 """Run every experiment of the paper, in order, with one command.
 
-    python experiments/run_all.py              # E4, E5, E2, E3, E1 (without the LLM)
+    python experiments/run_all.py              # E4, E5, E2, E3, E1 (without the LLM), E6
     python experiments/run_all.py --with-llm   # also the LLM baseline of E1 (API key)
     python experiments/run_all.py --episodes 20   # quick trial with fewer seeds
 
@@ -42,6 +42,8 @@ def main(argv=None) -> None:
          run + [str(ROOT / "configs" / "e3_fallback_ablation.yaml"), "--workers", str(a.workers)] + ep),
         ("E1 baselines (H1): UCRA, FCFS, no coordination",
          run + [str(ROOT / "configs" / "e1_baselines.yaml"), "--workers", str(a.workers)] + ep),
+        ("E6 V2X channel (H5): message delay and packet loss",
+         run + [str(ROOT / "configs" / "e6_v2x_channel.yaml"), "--workers", str(a.workers)] + ep),
     ]
     if a.with_llm:
         steps.append(("E1 LLM baseline (CoDrivingLLM-style, gpt-4o-mini)",

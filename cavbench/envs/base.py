@@ -7,7 +7,9 @@
 * the noisy shared view of the scene (:meth:`observe`) given to arbiters,
   optionally passed through a V2X channel with message delay and packet loss
   (``v2x_level`` / ``v2x_delay`` / ``v2x_loss``; ideal by default):
-  true states -> [V2X: delay + loss] -> [Gaussian noise] -> arbiter;
+  true states -> [V2X: delay + loss] -> [Gaussian noise] -> [dead reckoning]
+  -> arbiter (dead reckoning moves each message forward by speed x age;
+  ``v2x_compensate``, on by default);
 * stable integer ids for vehicles, and the benchmark's termination rules.
 """
 from __future__ import annotations
@@ -43,6 +45,7 @@ ARBITRATION_DEFAULTS = {
     "v2x_level": None,  # one of V2X_LEVELS, or set v2x_delay / v2x_loss (None = ideal)
     "v2x_delay": None,  # [s]
     "v2x_loss": None,  # packet-loss probability
+    "v2x_compensate": True,  # dead reckoning: move each message forward by speed x age
     "spawn_during_episode": False,
     "cav_acc_limits": [-5.0, 3.0],
     "cav_initial_speed": 5.0,
@@ -199,10 +202,17 @@ class ArbitrationEnvMixin:
         if not self.v2x.is_ideal:  # delayed / lost messages, before the noise
             pos, spd, ages = self.v2x.receive(self.sim_time, [self.vid(v) for v in vehicles], rng)
         noisy_pos, noisy_spd = self.noise.perturb(pos, spd, rng)
+        compensate = self.config.get("v2x_compensate", True) and not self.v2x.is_ideal
         states = {}
-        for v, p, sp in zip(vehicles, noisy_pos, noisy_spd):
+        for v, p, sp, age in zip(vehicles, noisy_pos, noisy_spd, ages):
             path = self.path_cache.path_for(v)
             s, _ = path.project(p)
+            if compensate and age > 0:
+                # Dead reckoning (receiver side, for every arbiter): the message
+                # is `age` seconds old, so move the vehicle forward along its
+                # route at the reported speed.
+                s = min(s + max(float(sp), 0.0) * float(age), path.length)
+                p = path.position(s)
             is_cav = v in self.controlled_vehicles
             states[self.vid(v)] = SharedState(
                 vid=self.vid(v), is_cav=is_cav, position=p, speed=float(sp), path=path, s=s,

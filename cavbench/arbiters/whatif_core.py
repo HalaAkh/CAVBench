@@ -87,6 +87,9 @@ class RolloutConfig:
     prune_pairs: bool = True
     prune_margin: float = 8.0  # [m]
     exact_range: float = 12.0  # [m] exact footprint clearance below this centre distance
+    # V2X message age: older messages are more uncertain
+    age_aware: bool = True
+    age_acc: float = 3.0  # [m/s^2] unknown acceleration since the message was sent
 
     @property
     def steps(self) -> int:
@@ -215,8 +218,19 @@ def evaluate_options(
     shape = (1 if cfg.common_random_numbers else K, N, M)
     sig_p = max(obs.sigma_pos, cfg.sigma_pos_min)
     sig_v = max(obs.sigma_vel, cfg.sigma_vel_min)
-    eta_s = rng.normal(0.0, sig_p, size=shape)
-    eta_v = rng.normal(0.0, sig_v, size=shape)
+    # Per-vehicle spread: a message that is `age` seconds old (V2X delay or
+    # packet loss) was moved forward by dead reckoning, which assumes a
+    # constant speed; the speed error and an unknown acceleration add
+    #   sigma_s(age)^2 = sigma^2 + (sigma_v age)^2 + (a age^2 / 2)^2,
+    #   sigma_v(age)^2 = sigma_v^2 + (a age)^2.
+    age = np.zeros(M)
+    if cfg.age_aware:
+        ages = obs.extra.get("v2x_age", {}) if obs.extra else {}
+        age = np.array([float(ages.get(st.vid, 0.0)) for st in states])
+    sig_p_m = np.sqrt(sig_p ** 2 + (sig_v * age) ** 2 + (0.5 * cfg.age_acc * age ** 2) ** 2)
+    sig_v_m = np.sqrt(sig_v ** 2 + (cfg.age_acc * age) ** 2)
+    eta_s = rng.normal(0.0, 1.0, size=shape) * sig_p_m
+    eta_v = rng.normal(0.0, 1.0, size=shape) * sig_v_m
     is_hdv = roles[0] == HDV
     # Human drivers: own desired speed per rollout; do they follow the priority rule?
     hdv_speed = v_target[0][None, None, :] + cfg.hdv_speed_sd * rng.normal(size=(1, N, M)) * is_hdv
@@ -254,8 +268,8 @@ def evaluate_options(
     # them is too far from the conflict area to reach it, or left it long ago).
     if len(ia) and cfg.prune_pairs:
         v_lim = max(obs.v_max, cfg.hdv_desired_speed + 3 * cfg.hdv_speed_sd)
-        reach = np.maximum(v0, v_lim) * cfg.horizon + 3 * sig_p + cfg.prune_margin
-        past = np.maximum(v0, 1.0) * max(cfg.pet_safe, 1.0) + 3 * sig_p + cfg.prune_margin
+        reach = np.maximum(v0, v_lim) * cfg.horizon + 3 * sig_p_m + cfg.prune_margin
+        past = np.maximum(v0, 1.0) * max(cfg.pet_safe, 1.0) + 3 * sig_p_m + cfg.prune_margin
         keep = np.ones(len(ia), dtype=bool)
         for n, (a, b) in enumerate(zip(ia, ib)):
             if shared[a, b] or shared[b, a]:

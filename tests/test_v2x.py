@@ -98,3 +98,46 @@ def test_episode_runs_with_v2x(level):
     env = make_env("intersection", {"noise_level": "high", "v2x_level": level, "duration": 15})
     m = run_episode(env, make_arbiter("fcfs"), seed=0)
     assert "success" in m and m["episode_time"] <= 15.5
+
+
+def test_dead_reckoning_moves_old_messages_forward():
+    """With delay and no noise, compensated positions are closer to the truth."""
+    errs = {}
+    for comp in (False, True):
+        env = make_env("intersection", {"v2x_delay": 0.3, "v2x_compensate": comp, "duration": 6})
+        env.reset(seed=1)
+        rng = np.random.default_rng(0)
+        e = []
+        for _ in range(20):
+            obs = env.observe(rng)
+            for v in env.road.vehicles:
+                st = obs.states[env.vid(v)]
+                if v.speed > 3:
+                    e.append(np.linalg.norm(st.position - v.position))
+            _, _, te, tr, _ = env.step(tuple(1 for _ in env.cav_vids()))
+            if te or tr:
+                break
+        errs[comp] = np.mean(e)
+    assert errs[True] < 0.5 * errs[False]
+
+
+def test_rollout_spread_grows_with_message_age():
+    from cavbench.arbiters.whatif_core import RolloutConfig, evaluate_options
+    env = make_env("intersection", {"duration": 20})
+    arb = make_arbiter("whatif_fuzzy")
+    env.reset(seed=1000)
+    rng = np.random.default_rng(0)
+    for _ in range(100):
+        obs = env.observe(rng)
+        groups = arb.detector.groups(obs)
+        if groups:
+            break
+        env.step(tuple(2 for _ in env.cav_vids()))
+    assert groups
+    g = groups[0]
+    fresh = evaluate_options(obs, g, RolloutConfig(), np.random.default_rng(1))
+    obs.extra["v2x_age"] = {vid: 0.6 for vid in obs.states}
+    stale = evaluate_options(obs, g, RolloutConfig(), np.random.default_rng(1))
+    off = evaluate_options(obs, g, RolloutConfig(age_aware=False), np.random.default_rng(1))
+    assert max(r.uncertainty for r in stale) > max(r.uncertainty for r in fresh)
+    assert [r.uncertainty for r in off] == [r.uncertainty for r in fresh]

@@ -74,7 +74,7 @@ uncertainty U and fuzzy acceptability A.
 **Everything, with one command** (resumes where it stopped if interrupted):
 
 ```bash
-python experiments/run_all.py              # E4, E5, E2, E3 and E1 without the LLM
+python experiments/run_all.py              # E4, E5, E2, E3, E1 without the LLM, and E6
 python experiments/run_all.py --with-llm   # the same, plus the LLM baseline (API key)
 jupyter notebook analysis/statistics.ipynb # tables, statistical tests, figures
 ```
@@ -89,6 +89,7 @@ Use `--episodes 20` for a quick trial. The experiments one by one:
 | E3 | `configs/e3_fallback_ablation.yaml` | with vs without the fallback (H3) |
 | E4 | `configs/e4_rollout_sensitivity.yaml` | are N = 100 rollouts enough? (Theorem 1) |
 | E5 | `configs/e5_realtime.yaml` | decision time (H4); run with `--workers 1` |
+| E6 | `configs/e6_v2x_channel.yaml` | V2X delay and packet loss (H5) |
 
 ```bash
 python experiments/run_experiment.py configs/e1_baselines.yaml --workers 8
@@ -151,41 +152,44 @@ Every 0.2 s:
 ## V2X channel: delay and packet loss (optional)
 
 By default the shared states reach the arbiter instantly and without loss.
-An optional V2X channel models an imperfect radio link. It acts on the true
-states, **before** the Gaussian perception noise:
+An optional V2X channel models an imperfect radio link:
 
 ```
-true states -> [V2X: delay + loss] -> [Gaussian noise] -> arbiter
+true states -> [V2X: delay + loss] -> [Gaussian noise] -> [dead reckoning] -> arbiter
 ```
 
 * **Delay**: the arbiter receives each vehicle's newest message sent at least
   `delay` seconds ago.
 * **Packet loss**: with probability `loss` the newest message is lost and the
   arbiter keeps the last message it received from that vehicle (it gets older).
+* **Dead reckoning** (for every arbiter, as in practice): the receiver moves each
+  message forward along the vehicle's route by speed × age
+  (`v2x_compensate: false` turns it off).
+* **Age-aware uncertainty** (UCRA): in the rollouts, each vehicle's imagined error
+  grows with the age of its message,
+  σ_s(age)² = σ² + (σ_v·age)² + (a·age²/2)², σ_v(age)² = σ_v² + (a·age)², a = 3 m/s²,
+  so stale information counts as less certain (`rollout: {age_aware: false}` turns
+  it off; this is the UCRA-noAge ablation).
 
-| Level | delay | loss probability |
-|---|---|---|
-| ideal (default) | 0 s | 0 |
-| typical | 0.1 s | 0.1 |
-| degraded | 0.3 s | 0.3 |
+| Level | delay | loss probability | Meaning |
+|---|---|---|---|
+| ideal (default) | 0 s | 0 | perfect link |
+| typical | 0.1 s | 0.1 | the 3GPP requirement for V2X safety messages (TR 22.885: ≤ 100 ms, ≥ 90% reception) |
+| degraded | 0.3 s | 0.3 | stress case beyond the requirement (congestion, buildings blocking the signal) |
 
-These values are proposals that still need a justification from the literature.
 Assumptions: every vehicle broadcasts at 15 Hz, the first message of each vehicle
-always arrives, and losses are independent.
-
-Use it through the env config, either with a level or with explicit values:
+always arrives, and losses are independent. Use it through the env config:
 
 ```yaml
 env: {v2x_level: typical}               # ideal / typical / degraded
 env: {v2x_delay: 0.2, v2x_loss: 0.05}   # explicit values (override the level)
 ```
 
-The age of the message used for each vehicle is available to arbiters in
-`obs.extra["v2x_age"]`. To watch an episode: `python experiments/watch.py --v2x degraded`.
-The experiment `configs/e6_v2x_channel.yaml` compares the three levels at the
-intersection. The loss randomness uses its own random generator, so the
-perception-noise samples stay matched across experiments, and the default (ideal)
-channel gives **identical results** to running without it.
+The age of the message used for each vehicle is in `obs.extra["v2x_age"]`. To watch
+an episode: `python experiments/watch.py --v2x degraded`. Experiment E6
+(`configs/e6_v2x_channel.yaml`) compares the three levels. The loss randomness uses
+its own random generator, so the perception-noise samples stay matched across
+experiments, and the ideal channel gives **identical results** to running without it.
 
 ## Low-level safety layer
 
