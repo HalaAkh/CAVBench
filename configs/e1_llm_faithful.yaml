@@ -1,0 +1,29 @@
+# E1, faithful CoDrivingLLM baseline (gpt-4o-mini): at every 0.2 s step one
+# negotiation call + one decision call per CAV, action safety check, and a
+# 2-shot memory (the paper's 90 % intersection result is the 2-shot version).
+# Intersection only, noise none and high, 50 matched seeds; same seeds and the
+# same results file (name: e1_baselines) as the other methods.
+#
+# Needs OPENAI_API_KEY (in .env or the environment). Steps:
+#   1) build the memory on training seeds (100000+), then it stays frozen:
+#        python experiments/build_llm_memory.py --model gpt-4o-mini
+#   2) check cost and speed:
+#        python experiments/llm_check.py --mode faithful
+#   3) run:
+#        python experiments/run_experiment.py configs/e1_llm_faithful.yaml --workers 8
+# Replies are cached in results/llm_cache/, so an interrupted run resumes
+# without paying again.
+name: e1_baselines
+episodes: 50
+seed_offset: 0
+noise_levels: [none, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+arbiters:
+  - label: CoDrivingLLM-faithful
+    kind: codrivingllm_faithful
+    params:
+      model: gpt-4o-mini
+      memory: {enabled: true, k: 2, name: intersection_gpt-4o-mini, learn: false}

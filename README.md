@@ -109,8 +109,11 @@ It calls `gpt-4o-mini` through the OpenAI API:
 
 1. Create a key at platform.openai.com (Settings → Billing: add about $10 of credit;
    API keys → Create new secret key). Never put the key in the code or on GitHub.
-2. `pip install openai`, then set the key: Windows `setx OPENAI_API_KEY "sk-..."`
-   (reopen the terminal); Mac/Linux `export OPENAI_API_KEY=sk-...`.
+2. `pip install openai`, then give CAVBench the key, either way:
+   * copy `.env.example` to `.env` (in the CAVBench folder) and write the key after
+     `OPENAI_API_KEY=`. The `.env` file is git-ignored, so it never goes to GitHub;
+   * or set the environment variable: Windows `setx OPENAI_API_KEY "sk-..."`
+     (reopen the terminal); Mac/Linux `export OPENAI_API_KEY=sk-...`.
 3. `python experiments/llm_check.py` makes one test call, runs 5 episodes and
    estimates the cost and time of the full run.
 4. `python experiments/run_experiment.py configs/e1_llm.yaml --workers 8`, or
@@ -124,6 +127,44 @@ of each episode. To test the pipeline without a key, use the `mock` model
 (`configs/llm_mock.yaml`, or `python experiments/watch.py --arbiter llm_mock`), which
 answers with the arrival order. To run the original CoDrivingLLM code in its own
 simulator, see `third_party/README.md`.
+
+### LLM baseline: simple vs faithful mode
+
+The LLM arbiter has two modes (`params: {mode: ...}`, or `kind: codrivingllm_faithful`):
+
+| | simple (default) | faithful |
+|---|---|---|
+| When the LLM is called | only when a conflict exists | at **every** 0.2 s step |
+| Calls per step | 1 per conflict group | 1 negotiation + 1 decision **per CAV** |
+| What the LLM decides | the passing order → FASTER / SLOWER | advisory pair order, then each CAV's own action |
+| Action safety check | – | unsafe actions removed before each decision |
+| Memory (few-shot examples) | – | optional, `k = 2` similar past situations |
+| Calls per intersection episode | ≈ 25 | ≈ 200–400 (+1 embedding request per step with memory) |
+
+The faithful mode reproduces the CoDrivingLLM design (Fang et al., 2025) from the
+paper's description; the remaining differences are listed in
+[docs/llm_baseline.md](docs/llm_baseline.md). Because it calls the LLM about ten
+times more often, run `python experiments/llm_check.py --mode faithful` first: it
+estimates the cost and time of `configs/e1_llm_faithful.yaml` (intersection, noise
+none and high, 50 seeds).
+
+**Memory, built fairly.** The memory is built on separate *training* seeds (100000
+and up, never used for evaluation) and then frozen, so evaluation episodes stay
+independent and matched with the other methods:
+
+```bash
+python experiments/build_llm_memory.py --model gpt-4o-mini   # 20 training episodes -> results/llm_memory/
+python experiments/llm_check.py --mode faithful              # cost / time estimate (uses the memory)
+python experiments/run_experiment.py configs/e1_llm_faithful.yaml --workers 8
+```
+
+**Free test (no key, no network):** `configs/llm_faithful_mock.yaml`,
+`python experiments/watch.py --arbiter llm_faithful_mock`, or
+`python experiments/build_llm_memory.py --model mock` (local embeddings). The CSV
+gets the extra columns `llm_calls_negotiation`, `llm_calls_decision`,
+`llm_calls_embedding`, `memory_items` and `memory_hits`; `llm_cost_usd` includes
+the embeddings. The key is read from `OPENAI_API_KEY` or the `.env` file, never
+from code or configs.
 
 ## Method in brief (UCRA)
 
@@ -210,16 +251,18 @@ cavbench/
   envs/          intersection.py, merge.py, base.py (noise, trajectories, termination)
   noise/         gaussian.py (four noise levels), v2x.py (optional V2X delay + packet loss)
   arbiters/      whatif_core.py (rollouts), fuzzy.py, whatif_fuzzy.py (UCRA),
-                 fcfs.py, no_coordination.py, codrivingllm_wrapper.py, commitment.py
+                 fcfs.py, no_coordination.py, codrivingllm_wrapper.py (LLM baseline),
+                 llm_faithful.py (faithful-mode prompts and safety check),
+                 llm_memory.py (memory of past decisions), commitment.py
   metrics/       safety.py (success, collisions, PET, speed)
   conflicts.py   ΔTTCP conflict detection and grouping
   geometry.py    routes as polylines, meeting points
   runner.py      one episode with matched seeds
 configs/         experiment configurations (YAML)
 experiments/     run_all.py, run_experiment.py, rollout_sensitivity.py,
-                 llm_check.py, watch.py (graphics)
+                 llm_check.py, build_llm_memory.py, watch.py (graphics)
 analysis/        statistics.ipynb
-docs/            fuzzy_layer.md
+docs/            fuzzy_layer.md, llm_baseline.md (faithful LLM mode vs the original)
 tests/           pytest suite
 third_party/     how to run the original CoDrivingLLM
 ```
