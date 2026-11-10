@@ -9,7 +9,7 @@ import pytest
 from cavbench.arbiters import FASTER, IDLE, SLOWER, make_arbiter
 from cavbench.arbiters import codrivingllm_wrapper as w
 from cavbench.arbiters.llm_faithful import (
-    DECISION_SYSTEM, NEGOTIATION_SYSTEM, allowed_actions, parse_action,
+    DECISION_SYSTEM, NEGOTIATION_SYSTEM, allowed_actions, decision_prompt, parse_action,
 )
 from cavbench.arbiters.llm_memory import FEEDBACK_BAD, FEEDBACK_GOOD, LLMMemory
 from cavbench.envs import make_env
@@ -193,6 +193,32 @@ def test_cache_key_of_simple_mode_unchanged():
     old = hashlib.sha256(f"mock|0.0|{w.SYSTEM_PROMPT}|p".encode("utf-8")).hexdigest()
     assert c._key("p") == old
     assert c._key("p", NEGOTIATION_SYSTEM) != old
+
+
+def test_memory_examples_change_prompt_and_cache_key():
+    mem = LLMMemory("local", k=2)
+    mem.add("You are vehicle 1, a CAV going straight. Serious conflict with vehicle 5.",
+            "SLOWER", FEEDBACK_GOOD)
+    mem.add("You are vehicle 2, a CAV turning left. General conflict with vehicle 3.",
+            "FASTER", FEEDBACK_BAD)
+    situation = "You are vehicle 1, a CAV going straight. Serious conflict with vehicle 4."
+    allowed = [SLOWER, IDLE]
+    memories = mem.retrieve(situation)
+    assert len(memories) == 2
+
+    zero_shot = decision_prompt(situation, allowed, [])
+    two_shot = decision_prompt(situation, allowed, memories)
+    assert "Example 1" not in zero_shot
+    assert "Example 1" in two_shot and "Example 2" in two_shot
+    for m in memories:
+        assert m["text"] in two_shot and m["feedback"] in two_shot
+    assert two_shot != zero_shot
+
+    c = w.LLMClient("mock")
+    assert c._key(two_shot, DECISION_SYSTEM) != c._key(zero_shot, DECISION_SYSTEM)
+    # different examples give a different key as well
+    one_shot = decision_prompt(situation, allowed, memories[:1])
+    assert c._key(one_shot, DECISION_SYSTEM) != c._key(two_shot, DECISION_SYSTEM)
 
 
 def test_env_file_parser(tmp_path, monkeypatch):
