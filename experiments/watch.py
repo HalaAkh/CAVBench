@@ -7,6 +7,7 @@ what happens in a single episode, or to save it as a video:
     python experiments/watch.py --arbiter fcfs --noise high --seed 3
     python experiments/watch.py --scenario intersection_dense --seed 7
     python experiments/watch.py --scenario merge
+    python experiments/watch.py --arbiter llm_faithful_mock      # faithful LLM mode, free
     python experiments/watch.py --v2x degraded --seed 3          # delayed / lost V2X messages
     python experiments/watch.py --seed 3 --save videos/ucra_seed3.mp4   # or .gif
 
@@ -52,6 +53,12 @@ ARBITERS = {  # short name -> (kind, params, label)
     "nocoord": ("no_coordination", {}, "No coordination"),
     "llm": ("codrivingllm", {"model": "gpt-4o-mini"}, "CoDrivingLLM-style (gpt-4o-mini)"),
     "llm_mock": ("codrivingllm", {"model": "mock"}, "CoDrivingLLM-style (mock, no API)"),
+    "llm_faithful": ("codrivingllm_faithful",
+                     {"model": "gpt-4o-mini", "memory": {"enabled": True, "k": 2,
+                                                         "name": "intersection_gpt-4o-mini"}},
+                     "CoDrivingLLM faithful (gpt-4o-mini, 2-shot memory)"),
+    "llm_faithful_mock": ("codrivingllm_faithful", {"model": "mock"},
+                          "CoDrivingLLM faithful (mock, no API)"),
 }
 VIEW = {  # screen size [px], scaling [px/m], camera centre [m]
     "intersection": {"screen_width": 820, "screen_height": 820, "scaling": 5.2,
@@ -189,10 +196,16 @@ class Watcher:
             self.clock.tick(15 * self.speed)
 
     def _decision_text(self) -> str:
-        if not self.groups:
-            return "No conflict: CAVs drive normally."
         now = [e for e in self.arbiter.log if self.obs is not None
                and abs(e.get("time", -1) - self.obs.time) < 1e-6]
+        neg = [e for e in now if e.get("mode") == "negotiation"]
+        if neg:  # faithful LLM mode: advisory passing order + each CAV's action
+            name = lambda v: f"CAV {self.label[v]}" if v in self.label else f"car {v}"  # noqa: E731
+            adv = ", ".join(f"{name(f)} before {name(s)}" for f, s, _ in neg[-1]["decisions"])
+            acts = " ".join(f"{name(e['vid'])}:{e['action']}" for e in now if e.get("mode") == "decision")
+            return f"LLM advice: {adv or 'no conflicts'}   ||   decisions: {acts}"
+        if not self.groups:
+            return "No conflict: CAVs drive normally."
         llm = [e for e in now if "order" in e]
         if llm:  # LLM coordinator: show its passing order
             return "   ||   ".join(

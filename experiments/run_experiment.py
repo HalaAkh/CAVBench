@@ -50,6 +50,9 @@ METRIC_COLUMNS = [
     # LLM baseline only (0 for the other arbiters):
     "llm_calls", "llm_cache_hits", "llm_tokens_in", "llm_tokens_out", "llm_cost_usd",
     "llm_failures", "llm_parse_failures",
+    # faithful LLM mode only:
+    "llm_calls_negotiation", "llm_calls_decision", "llm_calls_embedding",
+    "memory_items", "memory_hits",
 ]
 COLUMNS = KEY_COLUMNS + ["kind"] + METRIC_COLUMNS + ["wall_s"]
 
@@ -140,15 +143,23 @@ def main(argv=None) -> None:
         return
 
     new_file = not out.exists()
+    fieldnames = COLUMNS
     if not new_file:
         with out.open(newline="") as f:
             header = next(csv.reader(f), [])
         if header != COLUMNS:
-            raise SystemExit(f"{out} was written by an older version of CAVBench (different "
-                             f"columns). Rename or delete it and run again.")
+            if set(header) <= set(COLUMNS) and set(KEY_COLUMNS) <= set(header):
+                # Older file with fewer columns: keep appending in its own format.
+                fieldnames = header
+                missing = [c for c in COLUMNS if c not in header]
+                print(f"  note: {out} has the older column set; these columns are not "
+                      f"written to it: {', '.join(missing)}")
+            else:
+                raise SystemExit(f"{out} was written by an older version of CAVBench (different "
+                                 f"columns). Rename or delete it and run again.")
     t0 = time.time()
     with out.open("a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=COLUMNS)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         if new_file:
             writer.writeheader()
         if args.workers == 1:

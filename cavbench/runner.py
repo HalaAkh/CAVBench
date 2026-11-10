@@ -26,6 +26,7 @@ def run_episode(env, arbiter: Arbiter, seed: int, keep_log: bool = False) -> dic
         done = terminated or truncated
         steps += 1
 
+    arbiter.end_episode(env)
     m = episode_metrics(env)
     dt = np.array(arbiter.decision_times) if arbiter.decision_times else np.array([np.nan])
     modes = Counter(entry.get("mode", "commit") for entry in arbiter.log)

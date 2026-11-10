@@ -1,5 +1,5 @@
 from .base import FASTER, IDLE, SLOWER, Arbiter, FollowingSafety
-from .codrivingllm_wrapper import CoDrivingLLMArbiter
+from .codrivingllm_wrapper import CoDrivingLLMArbiter, CoDrivingLLMFaithfulArbiter
 from .fcfs import FCFSArbiter
 from .fuzzy import A_HIGH, A_LOW, FuzzyAcceptability
 from .no_coordination import NoCoordinationArbiter
@@ -11,6 +11,7 @@ ARBITERS = {
     "fcfs": FCFSArbiter,
     "no_coordination": NoCoordinationArbiter,
     "codrivingllm": CoDrivingLLMArbiter,
+    "codrivingllm_faithful": CoDrivingLLMFaithfulArbiter,  # mode="faithful"
 }
 
 
@@ -23,6 +24,7 @@ def make_arbiter(kind: str, **params) -> Arbiter:
 __all__ = [
     "ARBITERS", "make_arbiter", "Arbiter", "FollowingSafety", "SLOWER", "IDLE", "FASTER",
     "WhatIfFuzzyArbiter", "FCFSArbiter", "NoCoordinationArbiter",
-    "CoDrivingLLMArbiter", "FuzzyAcceptability", "A_LOW", "A_HIGH", "RolloutConfig",
+    "CoDrivingLLMArbiter", "CoDrivingLLMFaithfulArbiter", "FuzzyAcceptability", "A_LOW",
+    "A_HIGH", "RolloutConfig",
     "OptionResult", "evaluate_options",
 ]

@@ -119,6 +119,10 @@ class Arbiter:
         """Arbiter-specific per-episode numbers (e.g. LLM calls and cost)."""
         return {}
 
+    def end_episode(self, env) -> None:
+        """Called once when the episode is over (default: nothing). The faithful
+        LLM baseline uses it to give memory feedback on its last decisions."""
+
     def act(self, obs: SceneObservation, all_cavs: list[int]) -> dict[int, int]:
         t0 = time.perf_counter()
         groups = self.detector.groups(obs)

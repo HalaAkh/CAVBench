@@ -9,3 +9,7 @@ analysis/figures/
 third_party/CoDrivingLLM/
 results/llm_cache/
 videos/
+
+# local secrets (OpenAI key) and the LLM memory built by build_llm_memory.py
+.env
+results/llm_memory/

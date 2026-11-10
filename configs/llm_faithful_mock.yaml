@@ -1,0 +1,17 @@
+# Tests the faithful CoDrivingLLM pipeline for free (no API key, no network):
+# the "mock" model answers the negotiation with the arrival order and the
+# decisions with a simple rule. Results go to results/llm_faithful_mock.csv
+# (not used in the paper).
+#     python experiments/run_experiment.py configs/llm_faithful_mock.yaml
+# To also test the memory for free, build a mock memory first:
+#     python experiments/build_llm_memory.py --model mock --episodes 5
+# and uncomment the second arbiter.
+name: llm_faithful_mock
+episodes: 3
+noise_levels: [none, high]
+scenarios:
+  - {label: intersection, scenario: intersection, env: {}}
+arbiters:
+  - {label: CoDrivingLLM-faithful-mock, kind: codrivingllm_faithful, params: {model: mock}}
+  # - {label: CoDrivingLLM-faithful-mock-2shot, kind: codrivingllm_faithful,
+  #    params: {model: mock, memory: {enabled: true, k: 2, name: intersection_mock}}}
