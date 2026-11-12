@@ -1,0 +1,14 @@
+# Quick check of the MCTS baseline (Lin et al., T-ITS 2025): 3 episodes,
+# intersection, noise none and high, Table I settings (1000 iterations, depth 8).
+#     python experiments/run_experiment.py configs/mcts_smoke.yaml --workers 2
+# Results go to results/mcts_smoke.csv (not the E1 file).
+name: mcts_smoke
+episodes: 3
+seed_offset: 0
+noise_levels: [none, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+arbiters:
+  - {label: MCTS, kind: mcts}

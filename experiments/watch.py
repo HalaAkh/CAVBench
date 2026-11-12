@@ -8,6 +8,7 @@ what happens in a single episode, or to save it as a video:
     python experiments/watch.py --scenario intersection_dense --seed 7
     python experiments/watch.py --scenario merge
     python experiments/watch.py --arbiter llm_faithful_mock      # faithful LLM mode, free
+    python experiments/watch.py --arbiter mcts --seed 3          # MCTS baseline (slow: ~1000 iterations)
     python experiments/watch.py --v2x degraded --seed 3          # delayed / lost V2X messages
     python experiments/watch.py --seed 3 --save videos/ucra_seed3.mp4   # or .gif
 
@@ -59,6 +60,7 @@ ARBITERS = {  # short name -> (kind, params, label)
                      "CoDrivingLLM faithful (gpt-4o-mini, 2-shot memory)"),
     "llm_faithful_mock": ("codrivingllm_faithful", {"model": "mock"},
                           "CoDrivingLLM faithful (mock, no API)"),
+    "mcts": ("mcts", {}, "Safety-critical MCTS (Lin et al., 2025)"),
 }
 VIEW = {  # screen size [px], scaling [px/m], camera centre [m]
     "intersection": {"screen_width": 820, "screen_height": 820, "scaling": 5.2,
@@ -206,6 +208,15 @@ class Watcher:
             return f"LLM advice: {adv or 'no conflicts'}   ||   decisions: {acts}"
         if not self.groups:
             return "No conflict: CAVs drive normally."
+        mcts = [e for e in now if str(e.get("mode", "")).startswith("mcts")]
+        if mcts:  # MCTS: each CAV's action and how many root children passed the safety check
+            name = lambda v: f"CAV {self.label[v]}" if v in self.label else f"car {v}"  # noqa: E731
+            short = {FASTER: "FASTER", IDLE: "IDLE", SLOWER: "SLOWER"}
+            return "   ||   ".join(
+                " ".join(f"{name(v)}:{short[a]}" for v, a in e["actions"].items())
+                + f"  (safe options {e['safe_children']}/{e['children']}"
+                + (", none safe: least unsafe)" if e["mode"] == "mcts_no_safe_root" else ")")
+                for e in mcts)
         llm = [e for e in now if "order" in e]
         if llm:  # LLM coordinator: show its passing order
             return "   ||   ".join(

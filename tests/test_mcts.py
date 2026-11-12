@@ -1,0 +1,189 @@
+"""MCTS baseline (Lin et al., T-ITS 2025): tree search, safety check, risk functions.
+
+All tests use a small number of iterations to stay fast.
+"""
+import math
+
+import numpy as np
+import pytest
+
+from cavbench.arbiters import FASTER, SLOWER, make_arbiter
+from cavbench.arbiters.mcts import (
+    MCTSArbiter, MCTSConfig, MCTSPlanner, SceneModel, dynamic_safe_distance, hdv_covariance,
+    instantaneous_risk, rho, temporal_risk,
+)
+from cavbench.conflicts import ConflictGroup
+from cavbench.envs import make_env
+from cavbench.geometry import Path
+from cavbench.runner import run_episode
+from cavbench.state import SceneObservation, SharedState
+
+L = 60.0
+PATH_X = Path(np.c_[np.linspace(-L, L, 241), np.zeros(241)], key=(("tx_a", "tx_b"),))
+PATH_Y = Path(np.c_[np.zeros(241), np.linspace(-L, L, 241)], key=(("ty_a", "ty_b"),))
+ZONE = (np.zeros(2), 11.0)  # the crossing is at the origin
+
+
+def crossing(d_a, v_a, d_b, v_b):
+    """Two CAVs on perpendicular routes, d_a / d_b metres before the crossing point."""
+    a = SharedState(0, True, PATH_X.position(L - d_a), v_a, PATH_X, L - d_a,
+                    target_speed=9.0 if v_a > 6 else 4.5)
+    b = SharedState(1, True, PATH_Y.position(L - d_b), v_b, PATH_Y, L - d_b,
+                    target_speed=9.0 if v_b > 6 else 4.5)
+    return SceneObservation(0.0, {0: a, 1: b}, 0.0, 0.0)
+
+
+def planner(obs, cfg=None, seed=0):
+    cfg = cfg or MCTSConfig()
+    model = SceneModel(obs, ConflictGroup([0, 1]), cfg, np.random.default_rng(seed), {}, ZONE)
+    return MCTSPlanner(model, cfg, np.random.default_rng(seed))
+
+
+def test_registered_and_full_episode():
+    arb = make_arbiter("mcts", n_iterations=10)
+    assert isinstance(arb, MCTSArbiter) and arb.cfg.n_iterations == 10
+    assert MCTSConfig().n_iterations == 1000 and MCTSConfig().d_max == 8  # Table I defaults
+    m = run_episode(make_env("intersection", {"noise_level": "high"}), arb, seed=0)
+    for key in ["success", "collision", "avg_speed", "episode_time", "decision_ms_mean",
+                "mcts_iterations", "mcts_nodes", "mcts_pruned_fraction", "mcts_no_safe_root",
+                "mcts_max_group_size"]:
+        assert key in m
+    assert m["mcts_iterations"] > 0 and m["mcts_iterations"] % 10 == 0
+    assert m["mcts_nodes"] > 0 and 0.0 <= m["mcts_pruned_fraction"] <= 1.0
+    assert m["mcts_max_group_size"] >= 1
+
+
+def test_config_overrides_and_unsupported_options():
+    arb = make_arbiter("mcts", n_iterations=5, d_max=3, config={"c_exp": 2.0})
+    assert (arb.cfg.n_iterations, arb.cfg.d_max, arb.cfg.c_exp) == (5, 3, 2.0)
+    with pytest.raises(NotImplementedError):
+        make_arbiter("mcts", reuse_tree=True)
+
+
+def test_reproducible():
+    env = make_env("intersection", {"noise_level": "high"})
+    env.reset(seed=2)
+    rng = np.random.default_rng([2, 2026])
+    probe = make_arbiter("mcts")
+    for _ in range(100):
+        obs = env.observe(rng)
+        groups = probe.detector.groups(obs)
+        if groups:
+            break
+        env.step(tuple(FASTER for _ in env.cav_vids()))
+    assert groups
+    results = []
+    for _ in range(2):
+        arb = make_arbiter("mcts", n_iterations=30)
+        arb.reset(seed=7)
+        acts, pl, _ = arb.plan(obs, groups[0])
+        results.append((acts, pl.root.cN.copy(), pl.root.cQ.copy()))
+    assert results[0][0] == results[1][0]
+    assert np.array_equal(results[0][1], results[1][1])
+    assert np.array_equal(results[0][2], results[1][2])
+
+
+def test_expand_creates_all_children_and_marks_collision_unsafe():
+    pl = planner(crossing(8.0, 9.0, 8.0, 9.0))
+    pl.expand(pl.root)
+    r = pl.root
+    assert len(r.ch_safe) == 3 ** 2 and pl.n_nodes == 1 + 9
+    both_faster = int(np.flatnonzero((pl.joint == FASTER).all(axis=1))[0])
+    both_slower = int(np.flatnonzero((pl.joint == SLOWER).all(axis=1))[0])
+    assert not r.ch_safe[both_faster]  # both go FASTER into the crossing at the same time
+    assert r.ch_safe[both_slower]
+    # one CAV alone: 3 children
+    obs = crossing(8.0, 9.0, 30.0, 9.0)
+    del obs.states[1]
+    cfg = MCTSConfig()
+    one = MCTSPlanner(SceneModel(obs, ConflictGroup([0]), cfg, np.random.default_rng(0), {}, ZONE),
+                      cfg, np.random.default_rng(0))
+    one.expand(one.root)
+    assert len(one.root.ch_safe) == 3
+
+
+def test_unsafe_children_are_never_selected():
+    pl = planner(crossing(8.0, 9.0, 8.0, 9.0), MCTSConfig(n_iterations=200))
+    pl.run(200)
+    assert (~pl.root.ch_safe).any() and pl.root.ch_safe.any()
+    stack = [pl.root]
+    while stack:
+        n = stack.pop()
+        if n.expanded:
+            assert (n.cN[~n.ch_safe] == 0).all()
+            stack.extend(n.children.values())
+    k, ok = pl.best()
+    assert ok and pl.root.ch_safe[k]
+
+
+def test_ucb_backpropagation_and_best_child():
+    cfg = MCTSConfig()
+    pl = planner(crossing(30.0, 9.0, 30.0, 9.0), cfg)  # far apart: all children safe
+    pl.expand(pl.root)
+    r = pl.root
+    assert r.ch_safe.all()
+    # Eq. 25: an unvisited child has UCB = +inf
+    r.N = 10
+    r.cN[:] = 2
+    r.cN[4] = 0
+    assert pl.select(r) == 4
+    r.cN[:] = np.arange(1, 10)
+    r.cQ[:] = np.linspace(-1.0, 1.0, 9)
+    ucb = r.cQ + cfg.c_exp * np.sqrt(math.log(10) / r.cN)
+    assert pl.select(r) == int(np.argmax(ucb))
+    # Eq. 28 on a two-level path: N <- N + 1, Q <- Q + (Q_eval - Q) / N^beta_dec
+    r.N, r.Q = 3, 1.0
+    r.cN[2], r.cQ[2] = 1, 2.0
+    child = pl.child(r, 2)
+    pl.backpropagate(child, 5.0)
+    assert r.cN[2] == 2 and r.cQ[2] == pytest.approx(2.0 + (5.0 - 2.0) / 2 ** 0.75)
+    assert r.N == 4 and r.Q == pytest.approx(1.0 + (5.0 - 1.0) / 4 ** 0.75)
+    # Eq. 41: argmax of N + eps * Q over the safe children
+    r.cN[:] = [5, 5, 4, 1, 1, 1, 1, 1, 1]
+    r.cQ[:] = [-3.0, -1.0, 4.0, 0, 0, 0, 0, 0, 0]
+    assert pl.best() == (2, True)  # 4 + 0.5 * 4 = 6 > 5 - 0.5
+    r.ch_safe[2] = False
+    assert pl.best() == (1, True)
+
+
+def test_no_safe_root_child_returns_least_unsafe():
+    obs = crossing(4.5, 9.0, 4.5, 9.0)  # collision is unavoidable: every child is unsafe
+    arb = make_arbiter("mcts", n_iterations=20, zone_center=(0.0, 0.0))
+    arb.reset(seed=0)
+    acts = arb.arbitrate(obs, [ConflictGroup([0, 1])])
+    pl = planner(obs)
+    pl.expand(pl.root)
+    assert not pl.root.ch_safe.any()
+    least = int(np.argmin(pl.root.ch_risk))
+    assert acts == {0: int(pl.joint[least][0]), 1: int(pl.joint[least][1])}
+    assert arb.extra_metrics()["mcts_no_safe_root"] == 1
+    assert arb.log[-1]["mode"] == "mcts_no_safe_root"
+
+
+def test_dynamic_safe_distance_and_risk_functions():
+    cfg = MCTSConfig()
+    d_int = dynamic_safe_distance(2.0, 0.5, True, True, cfg, 9.0)
+    d_app = dynamic_safe_distance(2.0, 0.5, True, False, cfg, 9.0)
+    d_out = dynamic_safe_distance(2.0, 0.5, False, False, cfg, 9.0)
+    assert d_int > d_app > d_out
+    assert d_int == pytest.approx(3 * d_out) and d_app == pytest.approx(2 * d_out)
+    dv = np.array([0.0, 2.0, 6.0, 12.0])
+    assert np.all(np.diff(dynamic_safe_distance(dv, 0.0, False, False, cfg, 9.0)) > 0)
+    th = np.array([0.0, 0.5, 1.5, np.pi])
+    assert np.all(np.diff(dynamic_safe_distance(1.0, th, False, False, cfg, 9.0)) > 0)
+    # Eq. 7 at rest: d_base
+    assert dynamic_safe_distance(0.0, 0.0, False, False, cfg, 9.0) == pytest.approx(cfg.d_base)
+    # Eq. 11
+    assert rho(np.array([5.0, 6.0]), 5.0).tolist() == [0.0, 0.0]
+    assert rho(2.5, 5.0) == pytest.approx(0.25) and rho(0.0, 5.0) == pytest.approx(1.0)
+    # Eq. 9: risk 1 at contact without relative speed, larger with it
+    assert instantaneous_risk(0.0, 4.0, 0.0, cfg, 9.0) == pytest.approx(1.0)
+    assert instantaneous_risk(0.0, 4.0, 9.0, cfg, 9.0) == pytest.approx(1.3)
+    # Eq. 10: weights 1/(1+t), averaged over T_p
+    d_pred = np.zeros((5, 1))  # contact at every predicted point
+    expected = sum(1 / (1 + t) for t in range(1, 6)) / 5
+    assert temporal_risk(d_pred, np.array([4.0]), 5)[0] == pytest.approx(expected)
+    assert temporal_risk(np.full((5, 1), 10.0), np.array([4.0]), 5)[0] == 0.0
+    # Eq. 15: covariance grows with the prediction time and is a valid covariance
+    c1, c2 = hdv_covariance(0.5, cfg), hdv_covariance(2.0, cfg)
+    assert c2[0, 0] > c1[0, 0] and np.all(np.linalg.eigvalsh(c2) > 0)
