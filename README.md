@@ -60,7 +60,7 @@ python experiments/watch.py --seed 3 --save videos/ucra_seed3.mp4   # save a vid
 
 Options: `--scenario` (intersection, intersection_dense, merge), `--arbiter`
 (ucra, ucra_nou, ucra_nofallback, fcfs, nocoord, llm, llm_mock, llm_faithful,
-llm_faithful_mock, mcts), `--noise` (none, low,
+llm_faithful_mock, mcts, mcts_strict), `--noise` (none, low,
 medium, high), `--seed`, `--speed` (playback speed), `--save` and `--no-trails`
 (the recent path of each car is drawn by default, as in CoDrivingLLM's videos). The episode is
 exactly the one the experiments run for the same settings.
@@ -86,7 +86,7 @@ Use `--episodes 20` for a quick trial. The experiments one by one:
 | Experiment | Config | Question |
 |---|---|---|
 | Smoke test | `configs/smoke.yaml` | does everything run? (2 episodes per condition) |
-| E1 | `configs/e1_baselines.yaml` + `configs/e1_llm.yaml` + `configs/e1_mcts.yaml` | UCRA vs the LLM coordinator, MCTS, FCFS and no coordination (H1) |
+| E1 | `configs/e1_baselines.yaml` + `configs/e1_llm.yaml` + `configs/e1_mcts.yaml` (+ `e1_mcts_strict.yaml`) | UCRA vs the LLM coordinator, MCTS, FCFS and no coordination (H1) |
 | E2 | `configs/e2_uncertainty_ablation.yaml` | with vs without the uncertainty input U (H2) |
 | E3 | `configs/e3_fallback_ablation.yaml` | with vs without the fallback (H3) |
 | E4 | `configs/e4_rollout_sensitivity.yaml` | are N = 100 rollouts enough? (Theorem 1) |
@@ -180,10 +180,20 @@ check, random safe rollouts, and the multi-objective reward. Like the paper, it
 treats the noisy shared states as exact. Every adaptation and every value the
 paper does not give is listed in [docs/mcts_baseline.md](docs/mcts_baseline.md).
 
+Two versions exist. `kind: mcts` is the **strict** version (Table I plus our
+earlier choices). `kind: mcts_calibrated` is the **main baseline**: the same
+algorithm and Table I values, with two calibrated values that the paper does not
+fix (acceleration and jerk costs on the paper's acceleration scale, and
+w_v2v = 5). They were chosen on tuning seeds only, so that the paper's Case 1
+(4 CAVs, no human drivers: 0 % collisions) is reproduced. See the section
+"Calibration" in docs/mcts_baseline.md.
+
 ```bash
-python experiments/run_experiment.py configs/mcts_smoke.yaml --workers 6   # 6 episodes, timing check
-python experiments/run_experiment.py configs/e1_mcts.yaml --workers 8      # E1 rows -> results/e1_baselines.csv
-python experiments/watch.py --arbiter mcts --seed 3
+python experiments/run_experiment.py configs/mcts_smoke.yaml --workers 6        # timing check
+python experiments/run_experiment.py configs/e1_mcts.yaml --workers 8           # E1, calibrated ("MCTS")
+python experiments/run_experiment.py configs/e1_mcts_strict.yaml --workers 8    # E1, strict ("MCTS-strict")
+python experiments/run_experiment.py configs/mcts_case1_check.yaml --workers 10 # Case 1 check, tuning seeds
+python experiments/watch.py --arbiter mcts --seed 3          # calibrated (mcts_strict: strict)
 ```
 
 Any `MCTSConfig` value can be changed in a config, e.g.

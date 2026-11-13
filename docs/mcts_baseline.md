@@ -1,6 +1,6 @@
 # The MCTS baseline: our re-implementation vs Lin et al. (2025)
 
-CAVBench's MCTS baseline (`cavbench/arbiters/mcts.py`, kind `mcts`) re-implements
+CAVBench's MCTS baseline (`cavbench/arbiters/mcts.py`) re-implements
 
 > Z. Lin, J. Lan, C. Anagnostopoulos, Z. Tian, D. Flynn, "Safety-Critical Multi-Agent
 > MCTS for Mixed Traffic Coordination at Unsignalized Intersections", *IEEE Trans.
@@ -10,6 +10,16 @@ CAVBench's MCTS baseline (`cavbench/arbiters/mcts.py`, kind `mcts`) re-implement
 The authors' code (MATLAB 2024a) is not public. We implemented the method from
 the accepted manuscript (University of Glasgow repository, eprints.gla.ac.uk/362388,
 CC BY). Equation numbers below refer to that paper.
+
+There are two versions:
+
+* kind `mcts_calibrated`, the **main baseline** (label "MCTS" in E1). It is the
+  strict version plus two calibrated values that the paper does not fix (see
+  "Calibration" below).
+* kind `mcts`, the **strict** version (label "MCTS-strict"): Table I plus the
+  choices in the table below, nothing tuned.
+
+Both run the same algorithm (Algorithm 1) with the same Table I values.
 
 ## What the paper does
 
@@ -145,8 +155,151 @@ and the size of φ_v2v (−1).
 * SLOWER/FASTER change the target speed by 4.5 m/s, and the env's CAV braking
   limit is 5 m/s², while the paper's actions are at most ±3 m/s².
 
-We report the baseline with these values. Any re-weighting would have to be
-documented as a tuned variant.
+The strict version (kind `mcts`) keeps these values. The calibrated version
+re-scales them as documented in "Calibration" below.
+
+## Calibration
+
+### Why
+
+On the paper's Case 1 (4 CAVs, one per approach, no human drivers; the paper
+reports 0 % collisions), the strict version collided in 9 of 20 episodes and timed
+out in 2 (`configs/mcts_case1_check.yaml`, tuning seeds 100000–100019, noise none,
+ideal V2X). FCFS and UCRA succeeded in all 20.
+
+The diagnosis of every collision found **no bug**:
+
+* every chosen option had passed the safety check as the paper defines it;
+* a copy of the arbiter's own `evaluate` gave identical totals.
+
+The causes:
+
+* **Our adaptation (main cause).** The paper's actions are accelerations of at
+  most ±3 m/s², with a medium value of ±1.5 m/s². Our SLOWER changes the target speed
+  by 4.5 m/s, and the speed controller then brakes at about −4.8 m/s² on average over
+  a 0.5 s tree step. With Table I's w_acc and w_jerk, one such step costs about −4 per
+  CAV, against about −0.5 to −1 for driving on towards a collision (φ_v2v = −1).
+  Braking therefore always looked worse to the search.
+* **The two time-outs** have the same cause. CAVs that had stopped to give way
+  stayed stopped for the rest of the episode, because the cost of starting again
+  (+3 m/s², a jump in jerk) was larger than the speed penalty for standing.
+* **Values the paper does not give** (w_v2v, the T_p point spacing, the jerk
+  definition) set how strongly the safety term counts.
+* **The paper's V2V check is lenient.** It lets an overlap through when ‖Δv‖ is
+  moderate (section above). Our crashes passed it with Q_v2v = 0.72–0.80.
+
+### The rule
+
+* Never change a Table I value or Algorithm 1.
+* Change only values tied to our action adaptation, or values the paper does not
+  give, in this order (smallest change first):
+  1. a comfort scale;
+  2. w_v2v and w_v2h (1, 2, 5, 10), the T_p point spacing (1.0 → 0.5 s), and the jerk
+     definition.
+* Use only the tuning seeds 100000–100019, never the evaluation seeds.
+* Use a greedy search:
+  * stop at the first setting that meets the target on the Case 1 check: at most
+    1 collision in 20 (paper: 0 %), at least 90 % success (paper: 94.1 %), and as few
+    PET-violation episodes as possible;
+  * among settings with the same number of changes, prefer higher success, then
+    higher mean speed.
+
+### The comfort scale (formula)
+
+`MCTSConfig.a_med` (None in the strict version) switches it on:
+
+    comfort_scale = (a_med / a_step)^2
+    Q_acc  = -comfort_scale · w_acc  · acc^2
+    Q_jerk = -comfort_scale · w_jerk · jerk^2
+
+* **a_med:** a_med = 1.5 m/s², Table I's medium acceleration a_med (the paper's action set is built from it, Eq. 20).
+* **a_step:** a_step is the mean |acceleration| of one of our SLOWER tree steps
+  (`slower_step_acceleration`). The CAV starts steady at a target-speed level and is
+  sent to the level below, using the tree's own speed controller (kp = 1/0.6,
+  bounds [−5, 3] m/s², 5 × 0.1 s). The result is averaged over the pairs of
+  adjacent levels:
+  * intersection (0 / 4.5 / 9 m/s): a_step = 4.83 m/s², so comfort_scale = 0.096;
+  * merge (0 / 6 / 12 m/s): a_step = 5.0 m/s², so comfort_scale = 0.090.
+
+Scaling the squared terms by (a_med / a_step)² is the same as measuring our
+accelerations and jerks in units where one of our coarse steps equals the paper's
+medium acceleration. One SLOWER step then costs what a_med would cost in the paper.
+Table I's w_acc, w_jerk, w_1, w_2 and w_3 are unchanged.
+
+### Settings tried (Case 1 check, 20 episodes each, tuning seeds)
+
+| # | Setting | Changes | Success | Collisions | Time-outs | PET-violation episodes | Mean min PET [s] | Mean speed [m/s] | Decision time mean / p95 [ms] |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | strict (`mcts`) | 0 | 45 % | 9 | 2 | 7 | 1.04 | 6.89 | 5454 / 11495 |
+| 1 | comfort scale | 1 | 90 % | 2 | 0 | 8 | 1.48 | 7.43 | 9887 / 18815 |
+| 2 | comfort + w_v2v = 2 | 2 | 95 % | 0 | 1 | 2 | 1.96 | 6.88 | 6705 / 12734 |
+| 3 | **comfort + w_v2v = 5** | 2 | **100 %** | **0** | **0** | **0** | 2.30 | 6.85 | 5693 / 11693 |
+| 4 | comfort + w_v2v = 10 | 2 | 95 % | 0 | 1 | 0 | 2.57 | 6.29 | 5025 / 10852 |
+| 5 | comfort + T_p spacing 0.5 s | 2 | 95 % | 1 | 0 | 8 | 1.47 | 7.33 | 8813 / 17102 |
+| 6 | comfort + jerk = change per step (`jerk_def: delta`) | 2 | 80 % | 4 | 0 | 8 | 1.46 | 7.37 | 8459 / 15200 |
+
+Notes on the search:
+
+* Step 1 (comfort scale alone) missed the target by one collision.
+* In step 2, settings 2–5 meet it. Setting 3 has the highest success and no
+  PET-violation episode, so it is chosen; no combination was needed.
+* w_v2h was not varied, because Case 1 has no human drivers and w_v2h cannot change
+  anything there. It stays at 1.
+* Mean min PET is over the episodes that have a PET pair.
+
+### Chosen values (`MCTS_CALIBRATED`, kind `mcts_calibrated`)
+
+| Value | Strict | Calibrated | Type |
+|---|---|---|---|
+| a_med (comfort scale) | off | 1.5 m/s² = Table I's a_med (scale 0.096 intersection, 0.090 merge) | fixes our action adaptation (row 1) |
+| w_v2v | 1 | 5 | not given in the paper (row 25) |
+
+Everything else is identical, including all Table I values, w_v2h = 1, the T_p
+spacing of 1 s and the jerk definition. The test `test_strict_kind_unchanged`
+checks that kind `mcts` still takes exactly the actions of the version before the
+calibration.
+
+### Final Case 1 results (tuning seeds 100000–100019)
+
+| Method | Success | Collisions | Time-outs | PET-violation episodes | Mean min PET [s] | Mean speed [m/s] | Decision time mean / p95 [ms] |
+|---|---|---|---|---|---|---|---|
+| MCTS (calibrated) | 100 % | 0 | 0 | 0 | 2.30 | 6.85 | 5693 / 11693 |
+| MCTS-strict | 45 % | 9 | 2 | 7 | 1.04 | 6.89 | 5454 / 11495 |
+| FCFS | 100 % | 0 | 0 | 0 | 3.29 | 6.50 | 3 / 13 |
+| UCRA | 100 % | 0 | 0 | 0 | 2.56 | 5.87 | 72 / 147 |
+
+The paper's Case 1 numbers are 0 % collisions and 94.1 % success. The calibrated
+version reproduces them on these seeds.
+
+### Sanity check with human drivers (tuning seeds 100000–100019)
+
+This run used the normal `intersection` scenario (CAVs and human drivers, spawning
+on), 20 episodes per row. It is not used for choosing values, only to see whether
+the calibrated version also behaves better when human drivers are present.
+
+| Noise | Method | Success | Collisions | Time-outs | PET-violation episodes | Mean speed [m/s] | Decision time mean / p95 [ms] | No-safe-root decisions |
+|---|---|---|---|---|---|---|---|---|
+| none | MCTS (calibrated) | **80 %** | 2 | 2 | 2 | 5.80 | 25725 / 69041 | 261 |
+| none | MCTS-strict | 50 % | 5 | 5 | 6 | 5.51 | 27883 / 82791 | 42 |
+| none | FCFS | 100 % | 0 | 0 | 0 | 5.68 | 7 / 30 | – |
+| none | UCRA | 95 % | 0 | 1 | 1 | 5.43 | 139 / 263 | – |
+| high | MCTS (calibrated) | **65 %** | 6 | 1 | 3 | 5.68 | 26221 / 73765 | 129 |
+| high | MCTS-strict | 60 % | 6 | 2 | 7 | 5.59 | 26253 / 86858 | 101 |
+| high | FCFS | 100 % | 0 | 0 | 0 | 5.58 | 7 / 29 | – |
+| high | UCRA | 95 % | 1 | 0 | 0 | 5.46 | 137 / 273 | – |
+
+What the sanity check shows:
+
+* **Better than strict.** With human drivers, the calibrated version is better than
+  the strict one: +30 points of success without noise, +5 with high noise, fewer
+  time-outs and fewer PET violations.
+* **Still behind FCFS and UCRA.** It is clearly worse than both, especially with high
+  noise. The MCTS treats the noisy shared states as exact (row 3).
+* **The V2H side is now the limit.** It has many decisions with no safe root child
+  (V2H pairs). That side could not be calibrated on Case 1, since Case 1 has no human
+  drivers, so w_v2h stays at 1.
+
+The calibration was fixed before this check and was not changed after it.
 
 ## Speed-ups that do not change the algorithm
 

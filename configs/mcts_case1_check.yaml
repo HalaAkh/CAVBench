@@ -1,7 +1,8 @@
 # Reproduction check of the MCTS baseline against Case 1 of Lin et al. (T-ITS 2025):
 # 4 automated vehicles (one per approach), NO human-driven vehicles, exact states
-# (noise "none", ideal V2X). MCTS runs with Table I settings (1000 iterations,
-# depth 8); FCFS and UCRA are references. Tuning seeds 100000-100019, never used by
+# (noise "none", ideal V2X). "MCTS" is the strict version (Table I settings, 1000
+# iterations, depth 8; label kept from the first check), "MCTS-calibrated" the
+# calibrated one (docs/mcts_baseline.md, "Calibration"); FCFS and UCRA are references. Tuning seeds 100000-100019, never used by
 # the evaluation configs. Results go to results/mcts_case1_check.csv.
 #     python experiments/run_experiment.py configs/mcts_case1_check.yaml --workers 10
 name: mcts_case1_check
@@ -14,5 +15,6 @@ scenarios:
     env: {initial_vehicle_count: 0, spawn_during_episode: false}
 arbiters:
   - {label: MCTS, kind: mcts}
+  - {label: MCTS-calibrated, kind: mcts_calibrated}
   - {label: FCFS, kind: fcfs}
   - {label: UCRA, kind: whatif_fuzzy}

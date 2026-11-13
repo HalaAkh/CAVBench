@@ -9,8 +9,9 @@ import pytest
 
 from cavbench.arbiters import FASTER, SLOWER, make_arbiter
 from cavbench.arbiters.mcts import (
-    MCTSArbiter, MCTSConfig, MCTSPlanner, SceneModel, dynamic_safe_distance, hdv_covariance,
-    instantaneous_risk, rho, temporal_risk,
+    MCTS_CALIBRATED, MCTSArbiter, MCTSCalibratedArbiter, MCTSConfig, MCTSPlanner, SceneModel,
+    comfort_scale, dynamic_safe_distance, hdv_covariance, instantaneous_risk, rho,
+    slower_step_acceleration, temporal_risk,
 )
 from cavbench.conflicts import ConflictGroup
 from cavbench.envs import make_env
@@ -187,3 +188,77 @@ def test_dynamic_safe_distance_and_risk_functions():
     # Eq. 15: covariance grows with the prediction time and is a valid covariance
     c1, c2 = hdv_covariance(0.5, cfg), hdv_covariance(2.0, cfg)
     assert c2[0, 0] > c1[0, 0] and np.all(np.linalg.eigvalsh(c2) > 0)
+
+
+def test_comfort_scale_formula():
+    """comfort_scale = (a_med / a_step)^2, a_step = mean |acc| of one SLOWER tree step."""
+    cfg = MCTSConfig()
+    assert cfg.a_med is None and comfort_scale([0, 4.5, 9], cfg) == 1.0  # strict: off
+    # Intersection 9 -> 4.5 m/s with kp = 1/0.6, bounds [-5, 3], 5 x 0.1 s:
+    # -5, -5, -5, -5 (clipped), then kp * (4.5 - 7.0) = -4.1667  ->  v = 6.5833 m/s.
+    v = 9.0
+    for _ in range(5):
+        v += max(min((4.5 - v) / 0.6, 3.0), -5.0) * 0.1
+    a_step = (9.0 - v) / 0.5
+    assert slower_step_acceleration([0, 4.5, 9], cfg) == pytest.approx(a_step)
+    assert a_step == pytest.approx(4.8333, abs=1e-3)
+    cal = MCTSConfig(a_med=1.5)
+    assert comfort_scale([0, 4.5, 9], cal) == pytest.approx((1.5 / a_step) ** 2)
+    assert comfort_scale([0, 6, 12], cal) == pytest.approx((1.5 / 5.0) ** 2)  # merge levels
+    # It multiplies Q_acc and Q_jerk only: same state, the per-step reward changes by
+    # (1 - scale) * (w2 w_acc acc^2 + w3 w_jerk jerk^2) for a single vehicle.
+    obs = crossing(80.0, 9.0, 80.0, 4.5)  # far apart: no safety term
+    m0 = SceneModel(obs, ConflictGroup([0, 1]), cfg, np.random.default_rng(0), {}, ZONE)
+    m1 = SceneModel(obs, ConflictGroup([0, 1]), cal, np.random.default_rng(0), {}, ZONE)
+    j = np.array([[SLOWER, SLOWER]])
+    s0, s1 = m0.step(m0.root_state, j, 0), m1.step(m1.root_state, j, 0)
+    np.testing.assert_allclose(s0.acc, s1.acc)
+    cost = (cfg.w_self_eff * cfg.w_acc * s0.acc ** 2 + cfg.w_self_comfort * cfg.w_jerk * s0.jerk ** 2)
+    k = m0.lam  # r_i = (q_self + lam q_other) / (1 + lam (n-1)); q_other has acc but no jerk
+    acc_o = cfg.w_acc * s0.acc[0, ::-1] ** 2 * m0.w_other
+    expect = ((1 - m1.comfort_scale) * (cost[0] + k * acc_o) / (1 + k)).sum()
+    diff = m1.evaluate(s1, 1).reward[0] - m0.evaluate(s0, 1).reward[0]
+    assert diff == pytest.approx(expect)
+
+
+# Actions of the strict MCTS (40 iterations) in the first 25 decisions of intersection seed
+# 100000, noise none, recorded with the version committed before the calibration (b4dccbe).
+STRICT_ACTIONS = ['2221', '2122', '2222', '2120', '2222', '2122', '2222', '2122', '2121',
+                  '2121', '2222', '2222', '2222', '2122', '2222', '2222', '2221', '2122',
+                  '2221', '2122', '2121', '2221', '2220', '2120', '2220']
+
+
+def test_strict_kind_unchanged():
+    seed = 100000
+    env = make_env("intersection", {"noise_level": "none"})
+    arb = make_arbiter("mcts", n_iterations=40)
+    assert arb.cfg.a_med is None and arb.cfg.jerk_def == "rate"
+    assert arb.cfg == MCTSConfig(n_iterations=40)  # strict defaults
+    env.reset(seed=seed)
+    arb.reset(seed=seed + 10_000_019)
+    rng = np.random.default_rng([seed, 2026])
+    out = []
+    for _ in range(len(STRICT_ACTIONS)):
+        obs = env.observe(rng)
+        acts = arb.act(obs, env.active_cav_vids())
+        joint = tuple(int(acts.get(v, FASTER)) for v in env.cav_vids())
+        out.append("".join(map(str, joint)))
+        env.step(joint)
+    assert out == STRICT_ACTIONS
+
+
+def test_calibrated_kind_preset_and_overrides():
+    arb = make_arbiter("mcts_calibrated")
+    assert isinstance(arb, MCTSCalibratedArbiter) and arb.name == "mcts_calibrated"
+    for k, v in MCTS_CALIBRATED.items():
+        assert getattr(arb.cfg, k) == v
+    strict = MCTSConfig()
+    # Only calibration knobs differ from the strict version.
+    changed = {k for k in strict.__dict__ if getattr(strict, k) != getattr(arb.cfg, k)}
+    assert changed == set(MCTS_CALIBRATED) - {k for k, v in MCTS_CALIBRATED.items()
+                                               if getattr(strict, k) == v}
+    assert changed <= {"a_med", "w_v2v", "w_v2h", "tp_dt", "jerk_def"}
+    assert make_arbiter("mcts_calibrated", n_iterations=7).cfg.n_iterations == 7
+    with pytest.raises(ValueError):
+        MCTSArbiter(jerk_def="other")
+

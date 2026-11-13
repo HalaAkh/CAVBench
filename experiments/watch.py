@@ -60,7 +60,8 @@ ARBITERS = {  # short name -> (kind, params, label)
                      "CoDrivingLLM faithful (gpt-4o-mini, 2-shot memory)"),
     "llm_faithful_mock": ("codrivingllm_faithful", {"model": "mock"},
                           "CoDrivingLLM faithful (mock, no API)"),
-    "mcts": ("mcts", {}, "Safety-critical MCTS (Lin et al., 2025)"),
+    "mcts": ("mcts_calibrated", {}, "Safety-critical MCTS (Lin et al., 2025), calibrated"),
+    "mcts_strict": ("mcts", {}, "Safety-critical MCTS (Lin et al., 2025), strict Table I"),
 }
 VIEW = {  # screen size [px], scaling [px/m], camera centre [m]
     "intersection": {"screen_width": 820, "screen_height": 820, "scaling": 5.2,

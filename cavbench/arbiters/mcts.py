@@ -119,6 +119,13 @@ class MCTSConfig:
     w_vel: float = 0.4  # (Table I)
     w_acc: float = 0.3  # (Table I)
     w_jerk: float = 0.1  # (Table I)
+    # -- calibration (docs/mcts_baseline.md, "Calibration"); the strict defaults leave it off --
+    # a_med [m/s^2]: None = strict. Calibrated: 1.5 = Table I's medium acceleration. The acc
+    # and jerk costs are multiplied by comfort_scale = (a_med / a_step)^2, where a_step is the
+    # mean |acceleration| of one of our SLOWER tree steps (slower_step_acceleration), i.e. one
+    # of our coarse steps costs what the paper's medium acceleration a_med would cost.
+    a_med: float | None = None
+    jerk_def: str = "rate"  # "rate": (a_k - a_{k-1}) / dt_tree (our choice); "delta": a_k - a_{k-1}
     w_self_safety: float = 0.5  # w1 (Table I)
     w_self_eff: float = 0.3  # w2 (Table I)
     w_self_comfort: float = 0.2  # w3 (Table I)
@@ -129,6 +136,32 @@ class MCTSConfig:
 
 MCTS_FIELDS = {f.name for f in fields(MCTSConfig)}
 INTERSECTION_R_EX = 11.0  # HighwayEnv junction: outer_distance = 9 m + 4 m / 2
+
+
+def slower_step_acceleration(levels, cfg: MCTSConfig) -> float:
+    """a_step: mean |acceleration| over one tree step of a SLOWER action, for a CAV that
+    starts at a target-speed level (steady) and is sent to the level below, with the same
+    speed controller as in the tree (kp, acceleration bounds, dt_sim). Averaged over all
+    pairs of adjacent levels."""
+    levels = np.sort(np.asarray(levels, dtype=float))
+    lo, hi = cfg.cav_acc_limits
+    n = max(int(round(cfg.dt_tree / cfg.dt_sim)), 1)
+    dt = cfg.dt_tree / n
+    out = []
+    for v_hi, v_lo in zip(levels[1:], levels[:-1]):
+        v = v_hi
+        for _ in range(n):
+            v = max(v + min(max(cfg.kp * (v_lo - v), lo), hi) * dt, 0.0)
+        out.append((v_hi - v) / cfg.dt_tree)
+    return float(np.mean(out)) if out else 0.0
+
+
+def comfort_scale(levels, cfg: MCTSConfig) -> float:
+    """Factor on Q_acc and Q_jerk: (a_med / a_step)^2, or 1 when a_med is None (strict)."""
+    if cfg.a_med is None:
+        return 1.0
+    a_step = slower_step_acceleration(levels, cfg)
+    return (cfg.a_med / a_step) ** 2 if a_step > 0 else 1.0
 
 
 # -- risk functions (Section III-B) -------------------------------------------
@@ -250,6 +283,8 @@ class SceneModel:
         self.levels = np.array(sorted(obs.cav_target_speeds), dtype=float)
         self.v_max = obs.v_max
         self.v_ref = cfg.v_ref or obs.v_max
+        self.comfort_scale = comfort_scale(self.levels, cfg)
+        self.jerk_div = cfg.dt_tree if cfg.jerk_def == "rate" else 1.0
         self.zone_c, self.zone_r = np.asarray(zone[0], dtype=float), float(zone[1])
 
         paths = [st.path for st in states]
@@ -441,7 +476,7 @@ class SceneModel:
         acc[1:] = (vd[1:] - vd[:-1]) / self.cfg.dt_tree
         self.acc_ind = acc  # (d_max + 1, |ind|), acc at depth 0 = 0 as in the root state
         self.jerk_ind = np.zeros_like(acc)
-        self.jerk_ind[1:] = (acc[1:] - acc[:-1]) / self.cfg.dt_tree
+        self.jerk_ind[1:] = (acc[1:] - acc[:-1]) / self.jerk_div
 
     def _prepare_dependent(self) -> None:
         """Index tables for simulating only the action-dependent vehicles, in compact
@@ -540,7 +575,7 @@ class SceneModel:
         v[:, ic] = self.v_ind[k0 + n]
         v_start = state.v
         acc = (v - v_start) / self.cfg.dt_tree
-        jerk = (acc - state.acc) / self.cfg.dt_tree
+        jerk = (acc - state.acc) / self.jerk_div
         acc[:, ic] = self.acc_ind[depth + 1]
         jerk[:, ic] = self.jerk_ind[depth + 1]
         return TreeState(s, v, lvl, acc, jerk)
@@ -650,9 +685,10 @@ class SceneModel:
         q_vel = np.where(np.abs(dev) <= cfg.v_tol, 0.0,
                          np.where(dev > cfg.v_tol, -cfg.alpha_v * (dev - cfg.v_tol),
                                   -cfg.beta_v_pen * np.abs(dev)))
-        q_eff = cfg.w_vel * q_vel - cfg.w_acc * state.acc ** 2
+        cs = self.comfort_scale  # 1.0 in the strict version
+        q_eff = cfg.w_vel * q_vel - cs * cfg.w_acc * state.acc ** 2
         q_eff = np.where(active, q_eff, 0.0)
-        q_comfort = np.where(active, -cfg.w_jerk * state.jerk ** 2, 0.0)
+        q_comfort = np.where(active, -cs * cfg.w_jerk * state.jerk ** 2, 0.0)
         q_safety = np.where(active, q_safety, 0.0)
 
         mi = self.mem_idx
@@ -835,6 +871,8 @@ class MCTSArbiter(Arbiter):
             raise NotImplementedError(
                 "reuse_tree=True (Eq. 43) is not implemented: the scene is re-observed with "
                 "noise every 0.2 s, so the tree is rebuilt from the new observation.")
+        if self.cfg.jerk_def not in ("rate", "delta"):
+            raise ValueError(f"jerk_def must be 'rate' or 'delta', not {self.cfg.jerk_def!r}")
         if self.cfg.alpha_model != 0.0:
             raise NotImplementedError("alpha_model must be 0: there is no learned value predictor.")
         self._reset_counters()
@@ -913,3 +951,21 @@ class MCTSArbiter(Arbiter):
             "mcts_no_safe_root": self.no_safe_root,
             "mcts_max_group_size": self.max_group,
         }
+
+
+# Calibrated preset (docs/mcts_baseline.md, "Calibration"): only values tied to our
+# adaptation or not given in the paper; every Table I value and Algorithm 1 unchanged.
+# Chosen on the tuning seeds 100000-100019 only.
+MCTS_CALIBRATED = {"a_med": 1.5, "w_v2v": 5.0}
+
+
+class MCTSCalibratedArbiter(MCTSArbiter):
+    """:class:`MCTSArbiter` with the calibrated preset :data:`MCTS_CALIBRATED`
+    (any field can still be overridden from YAML)."""
+
+    name = "mcts_calibrated"
+
+    def __init__(self, config: dict | MCTSConfig | None = None, **kw) -> None:
+        if isinstance(config, MCTSConfig):
+            config = config.__dict__
+        super().__init__({**MCTS_CALIBRATED, **(config or {})}, **kw)
