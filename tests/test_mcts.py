@@ -289,3 +289,23 @@ def test_calibrated_v2h_weight():
         return out
 
     assert actions(None) == actions({"w_v2h": 1.0})
+
+
+def test_fixed_safe_distance_option():
+    """Trend-check option: fixed_d_safe replaces Eq. 7-8 by a constant; off by default."""
+    assert MCTSConfig().fixed_d_safe is None
+    assert make_arbiter("mcts_calibrated").cfg.fixed_d_safe is None
+    dv = np.array([[0.0, 5.0], [9.0, 2.0]])
+    dth = np.array([[0.0, 1.0], [np.pi, 0.5]])
+    app = np.array([[True, False], [True, True]])
+    inn = np.array([[False, False], [True, False]])
+    dyn = dynamic_safe_distance(dv, dth, app, inn, MCTSConfig(), 9.0)
+    assert dyn.min() >= 1.5 and dyn.max() > 2.0  # dynamic: depends on the pair
+    fixed = dynamic_safe_distance(dv, dth, app, inn, MCTSConfig(fixed_d_safe=2.0), 9.0)
+    assert fixed.shape == dyn.shape and np.all(fixed == 2.0)
+    # the option reaches the scene model (risk terms use the constant)
+    obs = crossing(6.0, 8.0, 6.0, 8.0)  # close to the crossing: dynamic d_safe > 2 m
+    m_fix = planner(obs, MCTSConfig(fixed_d_safe=2.0)).model
+    m_dyn = planner(obs).model
+    assert not np.allclose(m_fix.evaluate(m_fix.root_state, 0).risk,
+                           m_dyn.evaluate(m_dyn.root_state, 0).risk)

@@ -64,6 +64,8 @@ class MCTSConfig:
     leader_range: float = 30.0  # [m] same leader rule as the what-if rollouts
     # -- dynamic safe distance, Eq. 7-8 --
     d_base: float = 1.5  # [m] (Table I)
+    fixed_d_safe: float | None = None  # [m] trend check only: constant d_safe instead of
+                                       # Eq. 7-8 (None = dynamic, the paper's method)
     kappa_v: float = 0.3  # (Table I)
     beta_1: float = 0.2  # (Table I)
     beta_2: float = 0.2  # (Table I)
@@ -166,7 +168,13 @@ def comfort_scale(levels, cfg: MCTSConfig) -> float:
 
 # -- risk functions (Section III-B) -------------------------------------------
 def dynamic_safe_distance(dv, dtheta, in_app, in_int, cfg: MCTSConfig, v_ref: float):
-    """Eq. 7-8: d_safe = max(d_base, kappa_v |dv|) * alpha_1 * alpha_2 * alpha_3."""
+    """Eq. 7-8: d_safe = max(d_base, kappa_v |dv|) * alpha_1 * alpha_2 * alpha_3.
+
+    With ``cfg.fixed_d_safe`` set (trend check, paper Section V-C, item 2, Fig. 13(b)), a constant
+    d_safe of that value is returned instead; every use of d_safe is unchanged."""
+    if cfg.fixed_d_safe is not None:
+        shape = np.broadcast(np.asarray(dv), np.asarray(dtheta), np.asarray(in_app), np.asarray(in_int)).shape
+        return np.full(shape, float(cfg.fixed_d_safe))
     dv = np.abs(dv)
     a1 = 1.0 + cfg.beta_1 * dv / v_ref
     a2 = 1.0 + cfg.beta_2 * np.abs(dtheta) / np.pi

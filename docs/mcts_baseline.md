@@ -407,6 +407,59 @@ cannot change any decision; both runs are identical and match the old laptop:
 `test_calibrated_v2h_weight` checks the preset (10 calibrated, 1 strict) and that
 w_v2h does not change any Case 1 decision.
 
+## Trend checks
+
+Two checks of whether our implementation shows the same trends as the paper. They
+used the calibrated version (w_v2h = 10), the normal intersection scene, noise none
+and high, **tuning seeds 100000–100019 only**, 20 episodes per row, lab PC. Nothing
+was chosen from them; the defaults stay depth 8 and the dynamic d_safe.
+
+* **Depth:** d_max = 3 instead of 8 (paper, Tables II/III: depth 8 is better).
+* **Safety distance:** a constant d_safe = 2.0 m instead of Eq. 7–8. The paper
+  compares them in Section V-C "Component Impact Quantification", item 2 "Dynamic
+  Safety Threshold Impact" (Fig. 13(b)), in the Case 2 setting (ROP 50 %): arrival
+  87.3 % with the fixed threshold, 92.6 % with the dynamic one. Our option
+  `fixed_d_safe` (default None = dynamic, test `test_fixed_safe_distance_option`)
+  replaces only the output of Eq. 7–8, so every use of d_safe gets the constant:
+  r, R_Tp, φ_v2v, φ_v2h and C_ih (2.0 m × (1 − α_d·η_h) = 1.7 m).
+
+| Noise | Setting | Success | Collisions | Time-outs | PET-violation episodes | Mean min PET [s] | Mean speed [m/s] | Decision time mean / p95 [ms] | No-safe-root decisions |
+|---|---|---|---|---|---|---|---|---|---|
+| none | reference (depth 8, dynamic d_safe) | 85 % | 0 | 3 | 1 | 2.07 | 5.55 | 2798 / 9473 | 7 |
+| none | depth 3 | 65 % | 4 | 3 | 4 | 1.84 | 5.33 | 1498 / 4605 | 427 |
+| none | fixed d_safe = 2 m | 90 % | 2 | 0 | 14 | 1.05 | 7.38 | 3701 / 7988 | 8 |
+| high | reference (depth 8, dynamic d_safe) | 95 % | 0 | 1 | 1 | 2.20 | 5.49 | 3208 / 10261 | 27 |
+| high | depth 3 | 75 % | 4 | 1 | 4 | 2.07 | 4.94 | 1358 / 5186 | 136 |
+| high | fixed d_safe = 2 m | 95 % | 1 | 0 | 13 | 1.27 | 7.02 | 3264 / 6990 | 5 |
+
+The reference rows are identical to the w_v2h = 10 rows of the V2H sweep (a
+separate run), so the results repeat exactly.
+
+**How strong the evidence is.** With 20 episodes per row, a difference at one
+noise level alone (for example 4 vs 0 collisions) is not significant on its own.
+The statements below rely on the differences pooled over both noise levels.
+
+**Depth: consistent with the paper.** Depth 3 has 8 collisions in 40 episodes
+(both noise levels together) against 0 in 40 for depth 8, and 8 vs 2
+PET-violation episodes. Its success is lower (65 % vs 85 % and 75 % vs 95 %). It
+is about 2× faster per decision; with a 1.5 s look-ahead the tree sees conflicts
+later.
+
+**Safety distance: the safety trend is consistent with the paper, the arrival
+trend is not.**
+
+* **Safety (consistent).** With the dynamic d_safe there are fewer collisions
+  (0 in 40 vs 3 in 40) and far fewer PET-violation episodes (2 in 40 vs 27 in 40:
+  14 and 13 for the fixed distance, 1 and 1 for the dynamic one). Cars also pass
+  further apart (mean min PET 2.07 s vs 1.05 s at noise none).
+* **Arrival (not consistent).** The paper reports 87.3 % → 92.6 % arrival with the
+  dynamic threshold. We get 85 % with the dynamic and 90 % with the fixed distance
+  at noise none, and 95 % with both at high noise. In our runs the fixed distance
+  is more efficient: higher speed (7.4 vs 5.6 m/s) and no time-outs, while the
+  dynamic one has 3 and 1 time-outs. Possible reasons: our scene differs from the
+  paper's Case 2 (ROP 50 %), and our human drivers do not yield to crossing
+  traffic, so being more cautious costs time-outs rather than gaining arrivals.
+
 ## Speed-ups that do not change the algorithm
 
 * **Shared motion of independent vehicles.** Vehicles whose motion cannot depend on
