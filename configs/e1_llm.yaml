@@ -1,3 +1,4 @@
+# OLD paper-based "simple" version, NOT the released method: use configs/e1_codrivingllm.yaml.
 # E1, LLM baseline (CoDrivingLLM-style coordinator, gpt-4o-mini).
 # Same scenarios, noise levels and seeds as e1_baselines.yaml, and the same
 # results file (name: e1_baselines), so the rows sit next to the other methods.
@@ -23,4 +24,4 @@ scenarios:
     scenario: merge
     env: {}
 arbiters:
-  - {label: CoDrivingLLM, kind: codrivingllm, params: {model: gpt-4o-mini}}
+  - {label: CoDrivingLLM-simple, kind: codrivingllm, params: {model: gpt-4o-mini}}

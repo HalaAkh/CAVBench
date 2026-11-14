@@ -1,7 +1,7 @@
 """Run every experiment of the paper, in order, with one command.
 
     python experiments/run_all.py              # E4, E5, E2, E3, E1 (without the LLM), E6
-    python experiments/run_all.py --with-llm   # also the LLM baseline of E1 (API key)
+    python experiments/run_all.py --with-llm   # also CoDrivingLLM for E1 (API key)
     python experiments/run_all.py --episodes 20   # quick trial with fewer seeds
 
 Each step resumes where it stopped, so the command can simply be run again
@@ -22,10 +22,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--with-llm", action="store_true", help="also run configs/e1_llm.yaml")
+    ap.add_argument("--with-llm", action="store_true", help="also run configs/e1_codrivingllm.yaml (CoDrivingLLM, API key)")
     ap.add_argument("--episodes", type=int, help="override the number of seeds (for a trial)")
     ap.add_argument("--workers", type=int, default=max(os.cpu_count() or 1, 1))
-    ap.add_argument("--llm-workers", type=int, default=8)
+    ap.add_argument("--llm-workers", type=int, default=4)
     a = ap.parse_args(argv)
 
     run = [sys.executable, str(ROOT / "experiments" / "run_experiment.py")]
@@ -46,8 +46,8 @@ def main(argv=None) -> None:
          run + [str(ROOT / "configs" / "e6_v2x_channel.yaml"), "--workers", str(a.workers)] + ep),
     ]
     if a.with_llm:
-        steps.append(("E1 LLM baseline (CoDrivingLLM-style, gpt-4o-mini)",
-                      run + [str(ROOT / "configs" / "e1_llm.yaml"),
+        steps.append(("E1 CoDrivingLLM baseline (as released, gpt-4o-mini)",
+                      run + [str(ROOT / "configs" / "e1_codrivingllm.yaml"),
                              "--workers", str(a.llm_workers)] + ep))
 
     t_all = time.time()
@@ -63,9 +63,9 @@ def main(argv=None) -> None:
     print(f"\nAll done in {(time.time() - t_all) / 3600:.1f} h. "
           f"Now open analysis/statistics.ipynb.")
     if not a.with_llm:
-        print("The LLM baseline was not run: add your OpenAI key, check with "
-              "'python experiments/llm_check.py', then run 'python experiments/run_all.py --with-llm' "
-              "(the finished steps are skipped).")
+        print("CoDrivingLLM was not run: put your OpenAI key in .env, run the 2-episode cost "
+              "check (top of configs/e1_codrivingllm.yaml), then 'python experiments/run_all.py "
+              "--with-llm' (the finished steps are skipped).")
 
 
 if __name__ == "__main__":
