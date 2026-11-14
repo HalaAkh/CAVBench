@@ -1,0 +1,11 @@
+# Free test of the CoDrivingLLM reproduction (no API key, no network): the
+# "mock" LLM answers with a simple rule, so the numbers mean nothing; it only
+# checks that the whole pipeline runs. Results: results/codrivingllm_mock.csv
+#     python experiments/run_experiment.py configs/codrivingllm_mock.yaml
+name: codrivingllm_mock
+episodes: 3
+noise_levels: [none, high]
+scenarios:
+  - {label: intersection, scenario: intersection, env: {}}
+arbiters:
+  - {label: CoDrivingLLM-mock, kind: codrivingllm_repro, params: {model: mock}}

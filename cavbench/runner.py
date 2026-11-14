@@ -14,6 +14,8 @@ def run_episode(env, arbiter: Arbiter, seed: int, keep_log: bool = False) -> dic
     same sequence of perception-noise samples for every arbiter."""
     env.reset(seed=seed)
     arbiter.reset(seed=seed + 10_000_019)
+    if hasattr(arbiter, "attach"):  # arbiters that need the environment itself
+        arbiter.attach(env)          # (the CoDrivingLLM reproduction)
     noise_rng = np.random.default_rng([seed, 2026])
     done = False
     steps = 0

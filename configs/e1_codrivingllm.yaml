@@ -1,0 +1,30 @@
+# E1, CoDrivingLLM baseline AS RELEASED (github.com/FanGShiYuu/CoDrivingLLM),
+# reproduced in CAVBench by cavbench/arbiters/codrivingllm_repro.py:
+# gpt-4o-mini, one negotiation call + one decision call per CAV at every
+# 0.2 s step, the benchmark's prompts and safety tools, 5 m/s speed cap,
+# CAV speeds 0/5/10/15/20, no memory (as in the released code).
+# Same seeds, noise levels and results file (name: e1_baselines) as UCRA,
+# FCFS and the other methods, so the rows sit next to theirs.
+#
+# Needs OPENAI_API_KEY (in .env or the environment). Steps:
+#   1) free test, no key:   python experiments/run_experiment.py configs/codrivingllm_mock.yaml
+#   2) 2 paid episodes to see cost and time per episode:
+#        python experiments/run_experiment.py configs/e1_codrivingllm.yaml --episodes 2 --out results/codrivingllm_check.csv
+#   3) the full run (about 100 episodes, roughly 12-25 USD with gpt-4o-mini):
+#        python experiments/run_experiment.py configs/e1_codrivingllm.yaml --workers 4
+# Replies are cached in results/llm_cache/, so an interrupted run resumes
+# without paying again. gpt-4o-mini leaves the OpenAI API on 14 Jan 2027:
+# run before that date.
+name: e1_baselines
+episodes: 50
+seed_offset: 0
+noise_levels: [none, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+arbiters:
+  - label: CoDrivingLLM
+    kind: codrivingllm_repro
+    params:
+      model: gpt-4o-mini
