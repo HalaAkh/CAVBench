@@ -1,0 +1,24 @@
+# Reproduction check of the MCTS baseline against Case 2 of Lin et al. (T-ITS 2025):
+# mixed traffic, "four AVs and four HDVs approach the intersection from different
+# directions". Here: 4 CAVs (one per approach) and exactly 4 human-driven vehicles,
+# one per approach, 15-20 m ahead of the CAV (hdv_per_approach, see
+# cavbench/envs/intersection.py), no vehicles added during the episode, exact
+# states (noise "none", ideal V2X). The paper's Case 2 numbers: 92.6 % arrival,
+# 1.7 % collisions, 2.8 % PET violations. "MCTS-strict" is kind mcts (Table I
+# settings), "MCTS-calibrated" kind mcts_calibrated (docs/mcts_baseline.md,
+# "Calibration"); FCFS and UCRA are references. Tuning seeds 100000-100019, never
+# used by the evaluation configs. Results go to results/mcts_case2_check.csv.
+#     python experiments/run_experiment.py configs/mcts_case2_check.yaml --workers 15
+name: mcts_case2_check
+episodes: 20
+seed_offset: 100000
+noise_levels: [none]
+scenarios:
+  - label: intersection_case2
+    scenario: intersection
+    env: {hdv_per_approach: 1, spawn_during_episode: false}
+arbiters:
+  - {label: MCTS-calibrated, kind: mcts_calibrated}
+  - {label: MCTS-strict, kind: mcts}
+  - {label: FCFS, kind: fcfs}
+  - {label: UCRA, kind: whatif_fuzzy}

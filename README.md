@@ -182,17 +182,19 @@ paper does not give is listed in [docs/mcts_baseline.md](docs/mcts_baseline.md).
 
 Two versions exist. `kind: mcts` is the **strict** version (Table I plus our
 earlier choices). `kind: mcts_calibrated` is the **main baseline**: the same
-algorithm and Table I values, with two calibrated values that the paper does not
-fix (acceleration and jerk costs on the paper's acceleration scale, and
-w_v2v = 5). They were chosen on tuning seeds only, so that the paper's Case 1
-(4 CAVs, no human drivers: 0 % collisions) is reproduced. See the section
-"Calibration" in docs/mcts_baseline.md.
+algorithm and Table I values, with three calibrated values that the paper does not
+fix (acceleration and jerk costs on the paper's acceleration scale, w_v2v = 5 and
+w_v2h = 10). They were chosen on tuning seeds only: the first two so that the
+paper's Case 1 (4 CAVs, no human drivers: 0 % collisions) is reproduced, w_v2h
+with the Case 2 check (4 CAVs + 4 human drivers) and the normal intersection scene.
+See the section "Calibration" in docs/mcts_baseline.md.
 
 ```bash
 python experiments/run_experiment.py configs/mcts_smoke.yaml --workers 6        # timing check
 python experiments/run_experiment.py configs/e1_mcts.yaml --workers 8           # E1, calibrated ("MCTS")
 python experiments/run_experiment.py configs/e1_mcts_strict.yaml --workers 8    # E1, strict ("MCTS-strict")
 python experiments/run_experiment.py configs/mcts_case1_check.yaml --workers 10 # Case 1 check, tuning seeds
+python experiments/run_experiment.py configs/mcts_case2_check.yaml --workers 10 # Case 2 check, tuning seeds
 python experiments/watch.py --arbiter mcts --seed 3          # calibrated (mcts_strict: strict)
 ```
 

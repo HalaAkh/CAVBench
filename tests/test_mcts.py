@@ -262,3 +262,30 @@ def test_calibrated_kind_preset_and_overrides():
     with pytest.raises(ValueError):
         MCTSArbiter(jerk_def="other")
 
+
+
+def test_calibrated_v2h_weight():
+    """V2H calibration (docs/mcts_baseline.md, "Calibration" / "V2H"): the calibrated
+    kind uses w_v2h = 10, the strict kind keeps 1; without human drivers (Case 1) the
+    V2H weight cannot change any decision."""
+    assert make_arbiter("mcts").cfg.w_v2h == 1.0
+    assert make_arbiter("mcts_calibrated").cfg.w_v2h == 10.0
+    assert MCTS_CALIBRATED["w_v2h"] == 10.0
+
+    def actions(config):
+        seed = 100000
+        env = make_env("intersection", {"initial_vehicle_count": 0, "spawn_during_episode": False})
+        arb = make_arbiter("mcts_calibrated", n_iterations=30, config=config)
+        env.reset(seed=seed)
+        arb.reset(seed=seed + 10_000_019)
+        rng = np.random.default_rng([seed, 2026])
+        out = []
+        for _ in range(10):
+            obs = env.observe(rng)
+            acts = arb.act(obs, env.active_cav_vids())
+            joint = tuple(int(acts.get(v, FASTER)) for v in env.cav_vids())
+            out.append(joint)
+            env.step(joint)
+        return out
+
+    assert actions(None) == actions({"w_v2h": 1.0})

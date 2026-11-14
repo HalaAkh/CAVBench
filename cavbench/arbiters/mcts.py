@@ -955,8 +955,9 @@ class MCTSArbiter(Arbiter):
 
 # Calibrated preset (docs/mcts_baseline.md, "Calibration"): only values tied to our
 # adaptation or not given in the paper; every Table I value and Algorithm 1 unchanged.
-# Chosen on the tuning seeds 100000-100019 only.
-MCTS_CALIBRATED = {"a_med": 1.5, "w_v2v": 5.0}
+# Chosen on the tuning seeds 100000-100019 only: a_med and w_v2v on Case 1, w_v2h
+# with the Case 2 check and the normal intersection scene ("Calibration", "V2H").
+MCTS_CALIBRATED = {"a_med": 1.5, "w_v2v": 5.0, "w_v2h": 10.0}
 
 
 class MCTSCalibratedArbiter(MCTSArbiter):

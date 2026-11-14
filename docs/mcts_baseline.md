@@ -14,7 +14,7 @@ CC BY). Equation numbers below refer to that paper.
 There are two versions:
 
 * kind `mcts_calibrated`, the **main baseline** (label "MCTS" in E1). It is the
-  strict version plus two calibrated values that the paper does not fix (see
+  strict version plus three calibrated values that the paper does not fix (see
   "Calibration" below).
 * kind `mcts`, the **strict** version (label "MCTS-strict"): Table I plus the
   choices in the table below, nothing tuned.
@@ -74,7 +74,7 @@ layer (`FollowingSafety`) is applied afterwards.
 | # | Item | Paper | CAVBench | Reason |
 |---|---|---|---|---|
 | 1 | Actions | 5 accelerations × 5 steering rates per AV (Eq. 20) | SLOWER / IDLE / FASTER per CAV (target speed one level down / same / up); 3^K joint actions | the benchmark's action space, the same for every arbiter; vehicles follow their lanes, so there is no steering |
-| 2 | Who is planned jointly | all AVs in the scene | the CAVs of each conflict group (one tree per group); the CAVs that are not in a group drive FASTER | the same interface as the other arbiters (`arbitrate(obs, groups)`); it also keeps 3^K manageable |
+| 2 | Who is planned jointly | all AVs in the scene | the CAVs of each conflict group (one tree per group); the CAVs that are not in a group drive FASTER | the same interface as the other arbiters (`arbitrate(obs, groups)`); it also keeps 3^K manageable. **Considered, not implemented:** one tree for all CAVs every step, as in the paper (Section IV-C, Eq. 41–43). On Case 2 scenes it was about 2.4× slower per step (lab PC, 18 scenes), and with 8 CAVs (dense scene) it is impossible: 3^8 = 6561 root children against 1000 iterations. The replay of the V2H crashes ("Calibration", "V2H") showed the tree was already running 8–15 s before each CAV–HDV crash, with the HDV already checked, so the late reaction is not caused by the groups. One exception: with high noise (seed 100003) the CAV left every group 8 times in its last 3 s and drove FASTER by default |
 | 3 | Information | exact states | the same noisy, possibly delayed shared states as every arbiter, **treated as exact**: σ_pos, σ_vel and the V2X message age are ignored | intentional: the paper has no model of sensor or V2X noise, and this is the difference we study |
 | 4 | Tree step | not stated | Δt_tree = 0.5 s, d_max = 8 → 4 s look-ahead (`dt_tree`, `d_max`) | 4 s equals the horizon of UCRA's rollouts |
 | 5 | Motion model | 2-D kinematic model (Eq. 3–4) | 1-D along the planned route, positions and headings from the route polyline, inner step 0.1 s | vehicles follow lane centres in CAVBench |
@@ -97,7 +97,7 @@ layer (`FollowingSafety`) is applied afterwards.
 | 22 | Driving style η_h | known per HDV (sampled from Beta(2, 2) in the paper's Case 2) | η_h = 0.5 for every HDV (also used in the IDM scaling of Eq. 14) | CAVBench does not give drivers' styles to arbiters; 0.5 is the mean of the paper's Beta(2, 2) |
 | 23 | V2R (Eq. 6) | distance to road boundaries ≥ d_min = 1 m | always satisfied; Q_v2r = 0, w_v2r = 0 | on a lane centre a 2 m wide car is exactly 1 m from each edge of a 4 m lane, and actions are longitudinal only |
 | 24 | Sign of the risk terms in the reward (Eq. 29) | Q_v2v = Σ(φ_v2v + λ_T·R_Tp), Q_v2h = Σ(φ_v2h + λ_T·R_Tp + λ_c·C_ih) | **−** λ_T·R_Tp and **−** λ_c·C_ih (`risk_as_penalty=True`; `False` gives the printed signs) | as printed, more risk would *raise* the safety reward, while φ is a penalty (−1). We read the "+" as part of the sum of penalties |
-| 25 | w_v2v, w_v2h, w_v2r (Eq. 29) | not stated | 1.0, 1.0, 0 | equal weights; V2R is always satisfied (row 23) |
+| 25 | w_v2v, w_v2h, w_v2r (Eq. 29) | not stated | 1.0, 1.0, 0 (strict); the calibrated version uses w_v2v = 5, w_v2h = 10 ("Calibration") | equal weights; V2R is always satisfied (row 23) |
 | 26 | μ_s, κ_1…κ_4, η_1, η_2 (φ_v2h) | not stated | μ_s = 1; κ_1 = 1, κ_2 = κ_3 = κ_4 = 0; η_1 = η_2 = 0.2 | κ_1 = 1 makes the penalty below d_th equal to φ_v2v (−1); η like β_1, β_2 |
 | 27 | Efficiency (Q_vel, Q_acc, Q_ref) | Table I weights | v_des = top CAV target speed; a_des = 0; acceleration = mean acceleration over the tree step; Q_ref = 0; Q_eff = w_vel·Q_vel + Q_acc | lane following, so there is no reference-path error |
 | 28 | Comfort (Eq. 31) | −w_jerk·\|ȧ\|² − w_yaw·\|θ̈\|² | jerk = change of the mean acceleration between tree steps / 0.5 s (0 before the first step); yaw term 0 | no steering |
@@ -106,6 +106,7 @@ layer (`FollowingSafety`) is applied afterwards.
 | 31 | α_wait, v_thres (Eq. 33) | not stated | α_wait = 0.1 per s, v_thres = 1.0 m/s; T_wait = seconds the CAV has been below v_thres in this episode (noisy speeds; reset each episode); kept fixed inside the tree | the paper sums an indicator over time steps; we use seconds so that α_wait does not depend on the step |
 | 32 | λ_i | λ_base = 0.5 (Table I) | 0.5·exp(−α_wait·T_wait) | Eq. 33 |
 | 33 | HDV IDM base values | not stated | a = 3 m/s², b = 5 m/s², T = 1.5 s, s0 = 2 m, δ = 4, desired speed 8 m/s (UCRA's `RolloutConfig`), then style-scaled (Eq. 14, α_a = 0.3, α_T = 0.4, α_d = 0.3) | the same human-driver model as UCRA's rollouts |
+| 34 | Human drivers in the simulation (the "real" HDVs, not the tree's model) | Case 2: each HDV has a driving style η_h sampled from Beta(2, 2), which scales its IDM (Eq. 14) | HighwayEnv's IDM (`IDMVehicle`) with HighwayEnv's own random style: only the IDM exponent δ is drawn uniformly from [3.5, 4.5] (`randomize_behavior`); the other values are fixed (intersection: desired gap 7 m, comfort acceleration 6 / −3 m/s²). They yield only to vehicles ahead in their lane, not to crossing traffic | the benchmark's human-driver model, the same for every arbiter; the paper's style model is not part of HighwayEnv. The arbiter does not know the style either way (row 22) |
 
 All other values are Table I's: β_1 = β_2 = 0.2, κ_v = 0.3, λ_v = 0.3, d_base = 1.5 m,
 w^v2v = (0.6, 0.4), w^v2h = (0.4, 0.3, 0.3), Q_th^v2v = 0.8, Q_th^v2h = 0.6,
@@ -228,6 +229,11 @@ Table I's w_acc, w_jerk, w_1, w_2 and w_3 are unchanged.
 
 ### Settings tried (Case 1 check, 20 episodes each, tuning seeds)
 
+These Case 1 tables and the sanity check below were run on the old laptop. The V2H
+tables further down were run on the lab PC (16 cores), which is about 3–4.5× faster
+per decision; the other numbers are the same on both (Case 1 was re-checked on the
+lab PC). Compare decision times only within one table.
+
 | # | Setting | Changes | Success | Collisions | Time-outs | PET-violation episodes | Mean min PET [s] | Mean speed [m/s] | Decision time mean / p95 [ms] |
 |---|---|---|---|---|---|---|---|---|---|
 | 0 | strict (`mcts`) | 0 | 45 % | 9 | 2 | 7 | 1.04 | 6.89 | 5454 / 11495 |
@@ -244,7 +250,7 @@ Notes on the search:
 * In step 2, settings 2–5 meet it. Setting 3 has the highest success and no
   PET-violation episode, so it is chosen; no combination was needed.
 * w_v2h was not varied, because Case 1 has no human drivers and w_v2h cannot change
-  anything there. It stays at 1.
+  anything there. It was calibrated later, with human drivers (subsection "V2H").
 * Mean min PET is over the episodes that have a PET pair.
 
 ### Chosen values (`MCTS_CALIBRATED`, kind `mcts_calibrated`)
@@ -253,9 +259,10 @@ Notes on the search:
 |---|---|---|---|
 | a_med (comfort scale) | off | 1.5 m/s² = Table I's a_med (scale 0.096 intersection, 0.090 merge) | fixes our action adaptation (row 1) |
 | w_v2v | 1 | 5 | not given in the paper (row 25) |
+| w_v2h | 1 | 10 | not given in the paper (row 25); chosen in the subsection "V2H" |
 
-Everything else is identical, including all Table I values, w_v2h = 1, the T_p
-spacing of 1 s and the jerk definition. The test `test_strict_kind_unchanged`
+Everything else is identical, including all Table I values, the T_p spacing of
+1 s and the jerk definition. The test `test_strict_kind_unchanged`
 checks that kind `mcts` still takes exactly the actions of the version before the
 calibration.
 
@@ -273,8 +280,15 @@ version reproduces them on these seeds.
 
 ### Sanity check with human drivers (tuning seeds 100000–100019)
 
-This run used the normal `intersection` scenario (CAVs and human drivers, spawning
-on), 20 episodes per row. It is not used for choosing values, only to see whether
+This check was run before the V2H calibration, so "MCTS (calibrated)" below has
+w_v2h = 1 (old laptop).
+
+This run used the normal `intersection` scenario, 20 episodes per row. Its scene:
+4 CAVs and the default background traffic. The set-up makes 10 spawn attempts
+(each background vehicle with 60 % probability), then removes every background
+vehicle within 20 m of a CAV, so about 1–4 human-driven vehicles remain (2.65 on
+average on these seeds). No vehicles are added during the episode
+(`spawn_during_episode` is off). It is not used for choosing values, only to see whether
 the calibrated version also behaves better when human drivers are present.
 
 | Noise | Method | Success | Collisions | Time-outs | PET-violation episodes | Mean speed [m/s] | Decision time mean / p95 [ms] | No-safe-root decisions |
@@ -297,9 +311,101 @@ What the sanity check shows:
   noise. The MCTS treats the noisy shared states as exact (row 3).
 * **The V2H side is now the limit.** It has many decisions with no safe root child
   (V2H pairs). That side could not be calibrated on Case 1, since Case 1 has no human
-  drivers, so w_v2h stays at 1.
+  drivers.
 
-The calibration was fixed before this check and was not changed after it.
+The Case 1 calibration (a_med, w_v2v) was fixed before this check and was not
+changed after it. The V2H side was diagnosed and calibrated afterwards (next
+subsection).
+
+### V2H (w_v2h)
+
+All runs in this subsection used the **tuning seeds 100000–100019 only** and the lab
+PC (16 cores). The evaluation seeds were never used.
+
+**Diagnosis (no bug).** We replayed the sanity-check crashes and time-outs of the
+calibrated version with a copy of `SceneModel.evaluate` that returns every term.
+It matched the arbiter's own numbers to rounding error (≤ 4e-15). The replay
+reproduced 10 of the 11 episodes; high-noise seed 100015 succeeded on the lab PC
+(same package versions as the old laptop, so probably CPU rounding amplified by
+noise). What we found:
+
+* **6 of the 7 crashes were CAV–HDV** (1 CAV–CAV, high noise, the lenient V2V check).
+* **The CAV reacted too late.** The tree ran, and checked the HDV, 6–10 s before
+  each crash, but every action stayed "safe" until 1.4–3 s before it. The CAV was
+  then already inside the junction.
+* **The fallback then parked the CAV in the HDV's path.** In all 6 CAV–HDV crashes
+  the fallback (no safe root child, row 9) was used in the last 2 s: 48 of 56
+  decisions, 44 of them SLOWER. The HDVs do not yield to crossing traffic.
+* **C_ih is the term that pushes Q_v2h over 0.6.** Without it, no no-safe-root
+  decision was over the threshold (0 of 309). With Table I's small uncertainties
+  C_ih is almost always 0 or 1.
+* **The no-noise time-outs are gridlocks** inside the junction next to a stopped
+  HDV. The tree's HDV model ignores crossing CAVs (row 33), so it predicts the
+  stopped HDV will drive on, and every action looks unsafe or nearly so. One such
+  episode produced 213 of the 309 no-safe-root decisions.
+* **Values the paper does not give:** w_v2h = 1 makes the V2H penalty too weak
+  against efficiency, as w_v2v = 1 was in Case 1.
+
+**The Case 2 check** (`configs/mcts_case2_check.yaml`): the paper's mixed traffic,
+4 CAVs + exactly 4 HDVs, one per approach, 15–20 m ahead of the CAV
+(`hdv_per_approach: 1`), noise none. The paper's Case 2: 92.6 % arrival, 1.7 %
+collisions, 2.8 % PET violations. Target: at most 1 collision in 20, at least 90 %
+success, as few PET-violation episodes as possible. Only w_v2h was varied (1, 2,
+5, 10); the fallback rule and the tree's HDV model were not changed.
+
+| Method | Success | Collisions | Time-outs | PET-violation episodes | Mean min PET [s] | Mean speed [m/s] | Decision time mean / p95 [ms] | No-safe-root decisions |
+|---|---|---|---|---|---|---|---|---|
+| MCTS-cal, w_v2h = 1 | 100 % | 0 | 0 | 2 | 1.87 | 5.36 | 10644 / 36188 | 0 |
+| MCTS-cal, w_v2h = 2 | 95 % | 0 | 1 | 7 | 1.95 | 5.26 | 7222 / 25374 | 0 |
+| MCTS-cal, w_v2h = 5 | 90 % | 0 | 2 | 2 | 2.15 | 5.12 | 4436 / 16492 | 0 |
+| **MCTS-cal, w_v2h = 10** | **100 %** | **0** | **0** | 1 | 2.18 | 5.40 | 3369 / 11323 | 0 |
+| MCTS-strict | 40 % | 0 | 12 | 3 | 2.10 | 2.77 | 6553 / 33635 | 27 |
+| FCFS | 100 % | 0 | 0 | 0 | 2.82 | 5.10 | 3 / 11 | – |
+| UCRA | 100 % | 0 | 0 | 2 | 2.11 | 5.09 | 59 / 122 | – |
+
+**Case 2 could not tell w_v2h = 1 and 10 apart:** both give 100 % success and no
+collision. Our Case 2 scene is easier than the paper's (100 % vs 92.6 %): each
+HDV starts ahead of its CAV and faster, so it usually crosses before the CAVs
+arrive, and no calibrated setting had a single no-safe-root decision. The one
+PET-violation episode fewer for w_v2h = 10 is chance (1 in 20) and was not used.
+
+**The normal intersection scene** (the E1 scene: 4 CAVs + about 1–4 HDVs, no
+spawning), MCTS-cal, 20 tuning episodes per row:
+
+| Noise | w_v2h | Success | Collisions | Time-outs | PET-violation episodes | Mean min PET [s] | Mean speed [m/s] | Decision time mean / p95 [ms] | No-safe-root decisions |
+|---|---|---|---|---|---|---|---|---|---|
+| none | 1 | 80 % | 2 | 2 | 2 | 2.06 | 5.80 | 8025 / 21910 | 261 |
+| none | 2 | 95 % | 0 | 1 | 2 | 2.10 | 6.07 | 5020 / 16251 | 219 |
+| none | 5 | 90 % | 0 | 2 | 4 | 1.96 | 5.81 | 3356 / 11154 | 27 |
+| none | **10** | 85 % | **0** | 3 | 1 | 2.07 | 5.55 | 2836 / 9576 | 7 |
+| high | 1 | 70 % | 5 | 1 | 4 | 1.88 | 5.70 | 7806 / 22177 | 129 |
+| high | 2 | 90 % | 1 | 1 | 3 | 2.02 | 5.60 | 5066 / 17655 | 46 |
+| high | 5 | 95 % | 0 | 1 | 4 | 2.07 | 5.57 | 3513 / 12271 | 15 |
+| high | **10** | 95 % | **0** | 1 | 1 | 2.20 | 5.49 | 3236 / 10340 | 27 |
+
+The w_v2h = 1 rows reproduce the sanity check of the old laptop at noise none
+(80 %, 2 collisions, 2 time-outs, 261 no-safe-root decisions).
+
+**Choice: w_v2h = 10.** It meets the Case 2 target, and it was chosen because it
+removes the human-driver crashes on the normal scene (2 → 0 at noise none, 5 → 0
+with high noise). This used the tuning seeds only. Choosing it makes the baseline
+stronger, not weaker. **Its cost** is more caution: 3 time-outs instead of 2 at
+noise none (success 85 % vs 80 %), and a slightly lower mean speed.
+
+**What it does not fix:** seed 100011 still times out at every w_v2h (the gridlock
+above). The fallback rule (row 9) and the tree's HDV model (row 33) were left
+unchanged.
+
+**Case 1 re-check** with the chosen setting (lab PC). Case 1 has no HDVs, so w_v2h
+cannot change any decision; both runs are identical and match the old laptop:
+
+| Setting | Success | Collisions | Time-outs | PET-violation episodes | Mean min PET [s] | Mean speed [m/s] | Decision time mean / p95 [ms] |
+|---|---|---|---|---|---|---|---|
+| MCTS-cal, w_v2h = 1 | 100 % | 0 | 0 | 0 | 2.30 | 6.85 | 1269 / 2600 |
+| MCTS-cal, w_v2h = 10 | 100 % | 0 | 0 | 0 | 2.30 | 6.85 | 1277 / 2611 |
+
+`test_calibrated_v2h_weight` checks the preset (10 calibrated, 1 strict) and that
+w_v2h does not change any Case 1 decision.
 
 ## Speed-ups that do not change the algorithm
 
