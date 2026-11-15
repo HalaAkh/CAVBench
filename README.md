@@ -10,7 +10,9 @@ risk arbitration for connected autonomous vehicles with fuzzy decision-making"*
   CoDrivingLLM benchmark (Fang et al., 2025), a denser variant, and an on-ramp merge;
 - **Perception noise:** Gaussian noise on the positions and speeds that vehicles
   share, at four levels;
-- **Arbiters:** the proposed method (UCRA), first-come-first-served, no coordination
+- **Arbiters:** the proposed method (UCRA), classical first-come-first-served
+  (fixed arrival order, one vehicle in the conflict area at a time;
+  [docs/fcfs_baseline.md](docs/fcfs_baseline.md)), no coordination
   and an LLM arbiter in the style of CoDrivingLLM, all using the same noisy shared
   states and the same low-level safety layer;
 - **Metrics:** success, collisions, post-encroachment time (PET < 1.5 s = severe
