@@ -127,7 +127,10 @@ def choose(results: list[dict], keys: tuple = CHOICE_KEYS) -> int:
 
 @dataclass
 class _Plan:
+    """A passing order to follow. ``hdv_yield``: the CAVs also give way to human
+    drivers that would reach a shared conflict point earlier (FCFS-like)."""
     order: tuple
+    hdv_yield: bool
     time: float
 
 
@@ -141,12 +144,14 @@ class OracleArbiter(Arbiter):
         self._reset_state()
 
     def _reset_state(self) -> None:
-        self.plans: dict[frozenset, _Plan] = {}
-        self.n_orders = 0  # order evaluations (mode A)
-        self.n_options = 0  # option evaluations (mode B)
+        self.plans: dict[frozenset, _Plan] = {}  # mode A plans being followed
+        self.context: dict[frozenset, _Plan] = {}  # every group's current plan, used in copies
+        self.n_orders = 0  # candidate evaluations in mode A
+        self.n_options = 0  # candidate evaluations in mode B
         self.n_plans_a = 0
         self.n_plans_b = 0
-        self.n_cap = 0  # order evaluations that reached max_eval_time
+        self.n_cap = 0  # evaluations that reached max_eval_time
+        self.n_other_crash = 0  # evaluations in which a CAV outside the group crashed
         self.max_group = 0
 
     def reset(self, seed=None) -> None:
@@ -167,6 +172,7 @@ class OracleArbiter(Arbiter):
             "oracle_replans": plans,
             "oracle_cap_reached": self.n_cap,
             "oracle_max_group_size": self.max_group,
+            "oracle_other_crash_evals": self.n_other_crash,  # diagnostics, not a CSV column
         }
 
     # -- one decision step ------------------------------------------------
@@ -188,10 +194,20 @@ class OracleArbiter(Arbiter):
             actions = self.safety.apply(true, actions)
         return actions
 
+    @staticmethod
+    def _arrival_order(g) -> tuple:
+        ttcp = {v: arrival_time(g, v) for v in g.cavs}
+        return tuple(sorted(g.cavs, key=lambda v: (ttcp[v], v)))
+
     def arbitrate(self, obs, groups):
         actions = {}
         keys = {frozenset(g.cavs) for g in groups}
         self.plans = {k: p for k, p in self.plans.items() if k in keys}
+        # Current plan of every group, used for the other groups' CAVs in the
+        # copies: the stored plan or, if not planned yet, the arrival order with
+        # yielding to earlier human drivers (FCFS-like).
+        self.context = {frozenset(g.cavs): self.plans.get(frozenset(g.cavs))
+                        or _Plan(self._arrival_order(g), True, obs.time) for g in groups}
         for g in groups:
             self.max_group = max(self.max_group, len(g.cavs))
             if len(g.cavs) <= self.cfg.max_enum_cavs:
@@ -209,44 +225,69 @@ class OracleArbiter(Arbiter):
     def enumerate_orders(cavs) -> list[tuple]:
         return list(itertools.permutations(cavs))
 
+    def candidates(self, g) -> list[tuple[tuple, bool]]:
+        """Mode A candidates: every passing order of the group's CAVs (K!), each
+        with the CAVs giving way to earlier human drivers (True) or going before
+        them (False): 2 K! candidates, the arrival order with yielding first."""
+        rank = {v: i for i, v in enumerate(self._arrival_order(g))}
+        orders = sorted(self.enumerate_orders(g.cavs), key=lambda o: tuple(rank[v] for v in o))
+        return [(o, y) for o in orders for y in (True, False)]
+
     def _mode_a(self, obs, g):
         key = frozenset(g.cavs)
         plan = self.plans.get(key)
         entry = {"mode": "enum_follow"}
         if plan is None or obs.time - plan.time >= self.cfg.replan_period - 1e-9:
-            order, evals = self.plan_order(obs, g)
-            plan = self.plans[key] = _Plan(order, obs.time)
+            order, hdv_yield, evals = self.plan_order(obs, g)
+            plan = self.plans[key] = _Plan(order, hdv_yield, obs.time)
             entry = {"mode": "enum_plan", "evaluations": evals}
+        self.context[key] = plan
         entry["order"] = [int(v) for v in plan.order]
-        return self.order_actions(obs, plan.order), entry
+        entry["hdv_yield"] = plan.hdv_yield
+        return self.order_actions(obs, plan.order, plan.hdv_yield), entry
 
-    def plan_order(self, obs, g) -> tuple[tuple, list[dict]]:
-        """Evaluate every passing order on a copy of the simulation and return
-        the chosen one, with a short summary of each evaluation."""
+    def plan_order(self, obs, g) -> tuple[tuple, bool, list[dict]]:
+        """Evaluate every candidate on a copy of the simulation; return the chosen
+        order, its human-driver rule and a short summary of each evaluation."""
         self.n_plans_a += 1
-        ttcp = {v: arrival_time(g, v) for v in g.cavs}
-        rank = {v: i for i, v in enumerate(sorted(g.cavs, key=lambda v: (ttcp[v], v)))}
-        orders = sorted(self.enumerate_orders(g.cavs), key=lambda o: tuple(rank[v] for v in o))
-        if len(orders) == 1:
-            return orders[0], []
+        rank = {v: i for i, v in enumerate(self._arrival_order(g))}
+        cands = self.candidates(g)
         results, best = [], None
-        for order in orders:  # arrival order first: a good bound early prunes more
-            r = self.simulate_order(obs, g, order, best)
-            r["tiebreak"] = tuple(rank[v] for v in order)
+        for order, hdv_yield in cands:  # FCFS-like first: a good bound early prunes more
+            r = self.simulate_order(obs, g, order, best, hdv_yield)
+            r["tiebreak"] = (tuple(rank[v] for v in order), 0 if hdv_yield else 1)
             results.append(r)
             i = choose(results, self.cfg.choice)
             if not results[i]["collision"] and results[i]["severe"] == 0:
                 best = results[i]["cost"]
         k = choose(results, self.cfg.choice)
-        summary = [{"order": [int(v) for v in o], "collision": r["collision"], "severe": r["severe"],
-                    "cost": round(r["cost"], 3), "pruned": r["pruned"], "cap": r["cap"]}
-                   for o, r in zip(orders, results)]
-        return orders[k], summary
+        summary = [{"order": [int(v) for v in o], "hdv_yield": y, "collision": r["collision"],
+                    "severe": r["severe"], "cost": round(r["cost"], 3), "pruned": r["pruned"],
+                    "cap": r["cap"]}
+                   for (o, y), r in zip(cands, results)]
+        return cands[k][0], cands[k][1], summary
 
-    def simulate_order(self, obs, g: ConflictGroup, order, best_cost: float | None = None) -> dict:
+    def copy_actions(self, obs, g: ConflictGroup, group_actions: dict) -> dict[int, int]:
+        """Actions of all CAVs in a copy: the group being evaluated gets
+        ``group_actions``; the CAVs of the other groups follow their own current
+        plan (same order-following rule); the remaining CAVs drive FASTER (the
+        base default); then the safety layer, as in Arbiter.act."""
+        acts = {v: FASTER for v, st in obs.states.items() if st.is_cav and not st.arrived}
+        mine = frozenset(g.cavs)
+        for key, plan in self.context.items():
+            if key != mine:
+                acts.update({v: a for v, a in self.order_actions(obs, plan.order, plan.hdv_yield).items()
+                             if v in acts})
+        acts.update({v: a for v, a in group_actions.items() if v in acts})
+        if self.safety is not None:
+            acts = self.safety.apply(obs, acts)
+        return acts
+
+    def simulate_order(self, obs, g: ConflictGroup, order, best_cost: float | None = None,
+                       hdv_yield: bool = True) -> dict:
         """Run ``order`` on a copy until every CAV of the group has cleared its
-        conflict points (plus ``post_clear_time``), a CAV crashes, or
-        ``max_eval_time``. cost = sum of the clearing times (total delay)."""
+        conflict points (plus ``post_clear_time``), a CAV of the group crashes,
+        or ``max_eval_time``. cost = sum of the clearing times (total delay)."""
         cfg = self.cfg
         self.n_orders += 1
         sim = copy_env(self.env)
@@ -273,12 +314,8 @@ class OracleArbiter(Arbiter):
                 if bound > best_cost + 1e-9:
                     pruned = True
                     break
-            acts = {v: FASTER for v in sim.active_cav_vids()}
-            acts.update({v: a for v, a in self.order_actions(cur, order).items() if v in acts})
-            if self.safety is not None:
-                acts = self.safety.apply(cur, acts)
-            _, _, terminated, truncated, _ = sim.step(
-                tuple(int(acts.get(v, FASTER)) for v in sim.cav_vids()))
+            acts = self.copy_actions(cur, g, self.order_actions(cur, order, hdv_yield))
+            _, _, _, truncated, _ = sim.step(tuple(int(acts.get(v, FASTER)) for v in sim.cav_vids()))
             t += dt
             cur = true_observation(sim)
             if self._group_crashed(sim, members):
@@ -290,9 +327,10 @@ class OracleArbiter(Arbiter):
                         clear_t[v] = t
                 cap = len(clear_t) < len(members)
                 break
+        self._count_other_crash(sim, members)
         if cap:
             self.n_cap += 1
-        if pruned:  # cannot win: its cost is already above the best clean order
+        if pruned:  # cannot win: its cost is already above the best clean candidate
             return {"collision": False, "severe": 0, "cost": bound, "pruned": True, "cap": False}
         cost = sum(clear_t.get(v, cfg.max_eval_time) for v in members)
         return {"collision": collision, "severe": self._severe(sim), "cost": cost,
@@ -321,6 +359,30 @@ class OracleArbiter(Arbiter):
         margin = self.detector.cfg.passed_margin
         return any(d_v >= 0.0 and d_p >= -margin for d_v, d_p in self._points(a, b))
 
+    def hdv_blocks(self, obs, v: int) -> bool:
+        """FCFS-like rule for human drivers (true states): CAV v waits for a
+        human-driven vehicle that would reach their first shared conflict point
+        ahead no later than v (TTCP = d / max(speed, 1 m/s), both within the
+        detector's reaction range) and has not cleared it yet."""
+        a = obs.states.get(v)
+        if a is None:
+            return False
+        cfg = self.detector.cfg
+        for b in obs.states.values():
+            if b.is_cav or a.path.key[0] == b.path.key[0]:
+                continue  # same current lane: car following (the safety layer)
+            for d_v, d_h in self._points(a, b):
+                if d_v < 0.0 or d_h < -cfg.passed_margin:
+                    continue  # v is already at the point, or the driver has cleared it
+                if d_v > cfg.reaction_range or d_h > cfg.reaction_range:
+                    break
+                t_v = d_v / max(a.speed, cfg.min_speed)
+                t_h = max(d_h, 0.0) / max(b.speed, cfg.min_speed)
+                if t_h <= t_v:
+                    return True
+                break  # only the first point ahead counts, as in the detector
+        return False
+
     def has_cleared(self, obs, v: int, targets) -> bool:
         """CAV v has passed (by passed_margin) every conflict point it has with
         the vehicles of its group, or has left the scene."""
@@ -336,49 +398,70 @@ class OracleArbiter(Arbiter):
                 return False
         return True
 
-    def order_actions(self, obs, order) -> dict[int, int]:
+    def _wait_action(self, obs, st) -> int:
+        nearly_stopped = st.speed < self.cfg.stop_speed and (st.target_speed or 0.0) <= min(
+            obs.cav_target_speeds) + 1e-6
+        return IDLE if nearly_stopped else SLOWER
+
+    def order_actions(self, obs, order, hdv_yield: bool = False) -> dict[int, int]:
         """The first CAV of the order drives FASTER; every next CAV yields
         (SLOWER, or IDLE once it is nearly stopped) while an earlier CAV of the
         order has not cleared a conflict point they share, then drives FASTER.
-        CAVs that have left the scene are dropped from the order."""
+        With ``hdv_yield`` every CAV also yields to human drivers as in
+        :meth:`hdv_blocks`. CAVs that have left the scene are dropped."""
         acts, earlier = {}, []
         for v in order:
             st = obs.states.get(v)
             if st is None or st.arrived:
                 continue
-            if any(self.blocks(obs, v, p) for p in earlier):
-                nearly_stopped = st.speed < self.cfg.stop_speed and (st.target_speed or 0.0) <= min(
-                    obs.cav_target_speeds) + 1e-6
-                acts[v] = IDLE if nearly_stopped else SLOWER
-            else:
-                acts[v] = FASTER
+            wait = any(self.blocks(obs, v, p) for p in earlier) or (
+                hdv_yield and self.hdv_blocks(obs, v))
+            acts[v] = self._wait_action(obs, st) if wait else FASTER
             earlier.append(v)
         return acts
 
     # -- mode B: option search ----------------------------------------------
     def _mode_b(self, obs, g):
-        """One option per CAV going first (with the CAVs queued ahead of it), plus
-        'everyone yields' (as the what-if method), each held for option_horizon
-        on a copy; re-planned every step."""
+        """One option per CAV going first (with the CAVs queued ahead of it), with
+        and without yielding to earlier human drivers, plus 'everyone yields'
+        (2K + 1 options), each held for option_horizon on a copy; re-planned
+        every step."""
         self.n_plans_b += 1
-        goers = list(g.cavs) + [None]
+        cands = [(goer, y) for goer in self._arrival_order(g) for y in (True, False)] + [(None, True)]
         results = []
-        for goer in goers:
+        for goer, y in cands:
             moving = {goer, *platoon_ahead(obs, g, goer)} if goer is not None else set()
-            r = self.simulate_option(obs, g, moving)
-            r["tiebreak"] = arrival_time(g, goer) if goer is not None else math.inf
+            r = self.simulate_option(obs, g, moving, y)
+            r["tiebreak"] = (arrival_time(g, goer) if goer is not None else math.inf, 0 if y else 1)
             results.append(r)
         k = choose(results, self.cfg.choice)
-        goer = goers[k]
+        goer, y = cands[k]
         moving = {goer, *platoon_ahead(obs, g, goer)} if goer is not None else set()
-        acts = {v: FASTER if v in moving else SLOWER for v in g.cavs}
-        entry = {"mode": "option" if goer is not None else "fallback", "goer": goer,
-                 "evaluations": [{"goer": go, "collision": r["collision"], "severe": r["severe"],
-                                  "progress": round(-r["cost"], 2)}
-                                 for go, r in zip(goers, results)]}
+        acts = self.option_actions(obs, g, moving, y)
+        # For the copies of the other groups: this choice written as an order
+        # (the moving CAVs first, front to back, then the arrival order).
+        front = tuple(sorted(moving, key=lambda v: -obs.states[v].s))
+        rest = tuple(v for v in self._arrival_order(g) if v not in moving)
+        self.context[frozenset(g.cavs)] = _Plan(front + rest, y, obs.time)
+        entry = {"mode": "option" if goer is not None else "fallback", "goer": goer, "hdv_yield": y,
+                 "evaluations": [{"goer": go, "hdv_yield": yy, "collision": r["collision"],
+                                  "severe": r["severe"], "progress": round(-r["cost"], 2)}
+                                 for (go, yy), r in zip(cands, results)]}
         return acts, entry
 
-    def simulate_option(self, obs, g: ConflictGroup, moving: set) -> dict:
+    def option_actions(self, obs, g, moving: set, hdv_yield: bool) -> dict[int, int]:
+        """Mode B option: the moving CAVs drive FASTER (with ``hdv_yield``: unless
+        they must give way to a human driver), the other CAVs of the group SLOWER."""
+        acts = {}
+        for v in g.cavs:
+            st = obs.states.get(v)
+            if st is None or st.arrived:
+                continue
+            go = v in moving and not (hdv_yield and self.hdv_blocks(obs, v))
+            acts[v] = FASTER if go else SLOWER
+        return acts
+
+    def simulate_option(self, obs, g: ConflictGroup, moving: set, hdv_yield: bool = True) -> dict:
         """Hold one option for option_horizon on a copy. cost = - progress (metres
         travelled by the group's CAVs; a CAV that has left counts at top speed)."""
         self.n_options += 1
@@ -387,12 +470,8 @@ class OracleArbiter(Arbiter):
         steps = int(round(self.cfg.option_horizon / dt))
         cur, progress, collision = obs, 0.0, False
         for _ in range(steps):
-            acts = {v: FASTER for v in sim.active_cav_vids()}
-            acts.update({v: FASTER if v in moving else SLOWER for v in g.cavs if v in acts})
-            if self.safety is not None:
-                acts = self.safety.apply(cur, acts)
-            _, _, terminated, truncated, _ = sim.step(
-                tuple(int(acts.get(v, FASTER)) for v in sim.cav_vids()))
+            acts = self.copy_actions(cur, g, self.option_actions(cur, g, moving, hdv_yield))
+            _, _, _, truncated, _ = sim.step(tuple(int(acts.get(v, FASTER)) for v in sim.cav_vids()))
             cur = true_observation(sim)
             for v in g.cavs:
                 st = cur.states.get(v)
@@ -402,6 +481,7 @@ class OracleArbiter(Arbiter):
                 break
             if truncated or _all_arrived(sim):
                 break
+        self._count_other_crash(sim, g.cavs)
         return {"collision": collision, "severe": self._severe(sim), "cost": -progress}
 
     @staticmethod
@@ -411,6 +491,11 @@ class OracleArbiter(Arbiter):
         stay on the road as obstacles), so it cannot hide the group's result."""
         mem = set(members)
         return any(v.crashed and sim.vid(v) in mem for v in sim.controlled_vehicles)
+
+    def _count_other_crash(self, sim, members) -> None:
+        mem = set(members)
+        if any(v.crashed and sim.vid(v) not in mem for v in sim.controlled_vehicles):
+            self.n_other_crash += 1
 
 
 def _all_arrived(sim) -> bool:

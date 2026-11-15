@@ -54,15 +54,38 @@ on its own. Which mode is used depends on the group size K:
 | | Mode A: passing-order enumeration | Mode B: 4 s option search |
 |---|---|---|
 | Used when | K ≤ `max_enum_cavs` (5) | K > `max_enum_cavs` (e.g. dense scene, up to 8 CAVs) |
-| Candidates | every passing order of the group's CAVs: K! (2, 6, 24, 120) | the what-if method's candidates: one per CAV going first (with the CAVs queued ahead of it in its lane), plus "everyone yields" |
+| Candidates | every passing order of the group's CAVs (K!), each with "wait for earlier human drivers" and "go before them": 2·K! (2, 4, 12, 48, 240) | the what-if method's candidates: one per CAV going first (with the CAVs queued ahead of it in its lane), each with and without waiting for earlier human drivers, plus "everyone yields": 2K + 1 |
 | Evaluated on a copy | until every CAV of the group has cleared its conflict points (+ 1.5 s), cap 20 s | held for 4 s (20 decision steps) |
 | Cost (3rd key) | total clearing time: sum over the group's CAVs (total delay, as Xu et al.) | minus the progress: metres driven by the group's CAVs in 4 s |
 | Re-planned | every 2 s, and at once when the group changes | every step |
 | Exhaustive? | yes, over passing orders | no |
 
-A group with a single CAV (a conflict with a human-driven vehicle only) has one
-order, so nothing is simulated: that CAV drives FASTER, and the safety layer still
-applies.
+A group with a single CAV (a conflict with human-driven vehicles only) has one
+order, but still two candidates: wait for the human drivers that arrive earlier,
+or go before them. Both are simulated, so the oracle chooses.
+
+### Human drivers: wait for them, or go before them?
+
+Human drivers cannot be ordered: the oracle does not control them, and in
+HighwayEnv they do not give way to crossing traffic. What the oracle can choose is
+whether the CAVs wait for them. Every candidate therefore comes in two versions:
+
+* **wait (FCFS-like):** besides the order, every CAV also waits for a human-driven
+  vehicle that would reach their first shared conflict point ahead **no later**
+  than the CAV, and that has not cleared it yet. Arrival times use the true states
+  and the same formula as the detector and FCFS: TTCP = d / max(speed, 1 m/s),
+  both vehicles within the 50 m reaction range;
+* **go:** the CAVs follow the order only, as in Xu et al. (all-CAV traffic).
+
+The copies decide which is better, with the same choice rule. We did this rather
+than always waiting (the simple option) for two reasons. First, the oracle can
+then never be worse than "FCFS towards human drivers" just because it did not try
+it: the FCFS-like version is always one of the candidates, and it wins all ties.
+Second, waiting is not always the safer choice. A CAV that is already close to the
+point and fast may be safer going through than braking in front of it, and only
+the copy shows which is true. Choosing the version per human driver instead of
+per candidate would multiply the candidates by 2 to the power of the number of
+drivers, which is too slow (Case-2-like scenes have 4 drivers).
 
 ### The order-following rule (mode A)
 
@@ -77,7 +100,10 @@ Used both in the copies and in the real simulation, once an order is chosen:
   A CAV "has cleared" a point once it is `passed_margin` (4.5 m, the detector's
   value) past it, or has left the scene. A CAV that has already reached the
   point does not wait (it can no longer stop before it);
-* a CAV that has left the scene is dropped from the order.
+* a CAV that has left the scene is dropped from the order;
+* in the "wait" version of a candidate, every CAV also waits for earlier human
+  drivers (previous section). In mode B the moving CAVs do the same; the others
+  yield anyway.
 
 The rule waits for **every** earlier CAV that shares a conflict point, not only
 the one just before it. With only the previous one, in the order (A, C, B) where
@@ -101,9 +127,9 @@ The candidates are compared lexicographically (`OracleConfig.choice`):
    vehicle entering a conflict area just behind is still counted;
 3. smallest cost (mode A: total clearing time; mode B: minus the progress); a CAV
    still not cleared at the cap counts 20 s;
-4. ties: the order closest to the arrival (TTCP) order, i.e. first come, first
-   served. In mode B: the CAV going first that arrives earliest, with "everyone
-   yields" last. Deterministic.
+4. ties: the order closest to the arrival (TTCP) order, then the "wait for human
+   drivers" version, i.e. first come, first served. In mode B: the CAV going first
+   that arrives earliest, with "everyone yields" last. Deterministic.
 
 **Pruning (speed-up, same result).** Orders are evaluated in arrival order first.
 Once a candidate with no collision and no severe conflict is known, an order whose
@@ -113,8 +139,8 @@ identical to the one without pruning (test `test_pruning_does_not_change_the_cho
 
 ### Plan once, then follow (mode A)
 
-The chosen order is stored for the group and followed at every step with the
-order-following rule. It is re-planned every `replan_period` = 2 s (as Xu et al.),
+The chosen order, with its human-driver version, is stored for the group and
+followed at every step with the order-following rule. It is re-planned every `replan_period` = 2 s (as Xu et al.),
 and at once when the group changes (a CAV joins or leaves it, including a CAV that
 has cleared and left the group).
 
@@ -136,8 +162,8 @@ has cleared and left the group).
 
 Extra CSV columns (0 for the other methods):
 
-* `oracle_orders_evaluated`: mode A order evaluations (pruned ones included);
-* `oracle_options_evaluated`: mode B option evaluations;
+* `oracle_orders_evaluated`: mode A candidate evaluations (pruned ones included);
+* `oracle_options_evaluated`: mode B candidate evaluations;
 * `oracle_enum_share`: share of plans made in mode A (single-CAV groups included);
 * `oracle_replans`: number of plans (mode A and mode B);
 * `oracle_cap_reached`: order evaluations that reached `max_eval_time`;
@@ -153,8 +179,12 @@ decision step, for a later "decision quality" metric:
 * `mode`: `enum_plan` (new order), `enum_follow` (stored order followed),
   `option` or `fallback` (mode B);
 * `order`: the passing order followed (mode A); `goer`: the CAV going first (mode B);
+  `hdv_yield`: True if the CAVs wait for earlier human drivers;
 * `evaluations` (when a plan is made): per candidate, collision, severe conflicts,
   cost or progress, and whether it was pruned or reached the cap.
+
+`run_episode` also returns `oracle_other_crash_evals` (not a CSV column): the
+number of evaluations in which a CAV outside the planned group crashed in the copy.
 
 ## Limitations
 
@@ -163,24 +193,59 @@ decision step, for a later "decision quality" metric:
   same order may exist (for example slowing down early instead of stopping), and
   it is not searched.
 * **One group at a time.** Each conflict group is planned on its own. In the copy,
-  **CAVs outside the group drive with the base default (FASTER)**, while in
-  reality they may be slowed by their own arbitration. So the "known future" is
-  exact only for the group being planned; the rest of the scene in the copy is an
-  approximation. In the dense scene, the copies show crashes of other CAVs
-  driving FASTER. Such crashes do not count as a collision for the option (only a
-  crash of a CAV of the group does), and the copy keeps running with the crashed
-  cars as obstacles. They can still delay the group or cause a group crash that
-  would not happen in reality.
-* **Human drivers are not ordered.** Only the group's CAVs are permuted. A
-  human-driven vehicle in conflict is simulated exactly, but the oracle cannot
-  choose "this CAV waits for that human driver" except through the order of the
-  CAVs and the safety layer. A group with one CAV and a human driver has no
-  choice: the CAV drives FASTER.
-* **Mode B is not exhaustive.** For groups larger than 5 CAVs only K + 1 options
+  the CAVs of the **other groups follow their own current plan** with the same
+  order-following rule. This is their stored order, or, for a group not planned
+  yet, the arrival order with waiting for earlier human drivers; a mode B group's
+  latest choice is written as an order (its moving CAVs first). CAVs in **no
+  group** drive with the base default (FASTER), as they do in reality, but in
+  reality they would be planned as soon as they enter a conflict, and in the copy
+  they are not. Other plans are kept fixed during an evaluation and are not
+  re-planned in the copy. So the "known future" is exact only for the group being
+  planned; the rest of the scene in the copy is a good approximation, not the
+  exact future.
+* **Crashes of other vehicles in the copy.** For the reason above, a CAV outside
+  the planned group can still crash in a copy. In the sanity check (tuning seeds,
+  noise none) this happened in 207 evaluations in 20 intersection episodes,
+  1840 in 8 dense episodes and 19 in 8 merge episodes. So the rule "a collision
+  counts for a candidate only if a CAV of the group crashes" is still needed.
+  Such a crash does not stop the copy: the crashed cars stay on the road as
+  obstacles. It can still delay the group or block it in a way that would not
+  happen in reality.
+* **Human drivers: one choice per candidate.** The CAVs either wait for every
+  earlier human driver or go before all of them. Mixed choices (wait for this
+  driver, go before that one) are not searched.
+* **Mode B is not exhaustive.** For groups larger than 5 CAVs only 2K + 1 options
   are compared, over 4 s; the oracle is weaker there.
 * **Re-planning.** Between re-plans (2 s) the stored order is followed even if the
   scene changes, unless the group changes.
 * **Same at every noise level.** By design: it ignores the noisy observation.
+
+## Sanity check
+
+Oracle vs FCFS vs UCRA, **tuning seeds only** (100000 and up), noise none, lab PC
+with 15 episodes in parallel (so seconds per episode are slower than a single
+run). "PET-viol. eps" = episodes with at least one severe conflict (PET < 1.5 s).
+
+| Scene | Method | Episodes | Success | Collisions | Time-outs | PET-viol. eps | Mean min PET [s] | Mean speed [m/s] | Decision ms mean / p95 | s / episode |
+|---|---|---|---|---|---|---|---|---|---|---|
+| intersection | FCFS | 20 | 100 % | 0 | 0 | 0 | 2.92 | 5.68 | 3 / 12 | 1 |
+| intersection | UCRA | 20 | 95 % | 0 | 1 | 1 | 2.06 | 5.43 | 50 / 102 | 4 |
+| intersection | Oracle | 20 | 100 % | 0 | 0 | 0 | 2.98 | 5.92 | 758 / 2886 | 40 |
+| intersection_dense | FCFS | 8 | 100 % | 0 | 0 | 0 | 2.67 | 4.57 | 4 / 15 | 2 |
+| intersection_dense | UCRA | 8 | 100 % | 0 | 0 | 1 | 1.84 | 4.31 | 88 / 169 | 10 |
+| intersection_dense | Oracle | 8 | 100 % | 0 | 0 | 0 | 2.68 | 4.68 | 7048 / 32199 | 580 |
+| merge | FCFS | 8 | 100 % | 0 | 0 | 0 | 2.05 | 6.02 | 1 / 2 | 1 |
+| merge | UCRA | 8 | 88 % | 0 | 1 | 0 | 2.22 | 6.39 | 60 / 103 | 7 |
+| merge | Oracle | 8 | 100 % | 0 | 0 | 0 | 1.80 | 8.00 | 854 / 3712 | 41 |
+
+The oracle is at least as good as FCFS on safety in every scene (no collision, no
+PET violation) and faster (higher mean speed). Before the human-driver candidates
+were added, it had a PET violation in 3 of 8 intersection episodes. In the merge
+scene its mean minimum PET is lower than FCFS's (1.80 s vs 2.05 s), still above
+1.5 s: it lets vehicles pass closer, which gives the higher speed (8.0 vs 6.0 m/s).
+At noise none FCFS is already very strong in these scenes, so the oracle's margin
+over it is small here; the difference is expected to grow with noise, which the
+oracle ignores.
 
 ## Running it
 

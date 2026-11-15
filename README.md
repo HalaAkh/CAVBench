@@ -173,8 +173,9 @@ best result reachable in each situation. It reads the true vehicle states (no no
 no V2X delay or loss) and tests each option on an exact copy of the running
 simulation (same human drivers, same random state). For a conflict group of up to 5
 CAVs it tries every passing order (K! orders, as the global-optimum reference of Xu
-et al., IEEE T-ITS 2020), then follows the best one and re-plans every 2 s or when
-the group changes. Larger groups (dense scene) compare one option per CAV going
+et al., IEEE T-ITS 2020), each with the CAVs waiting for earlier human drivers or
+going before them, then follows the best one and re-plans every 2 s or when the
+group changes. Larger groups (dense scene) compare one option per CAV going
 first, plus "everyone yields", over 4 s. It is an upper bound with perfect
 information, not a proven global optimum; its results are the same at every noise
 level. Details and limitations: [docs/oracle_baseline.md](docs/oracle_baseline.md).
