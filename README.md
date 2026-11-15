@@ -190,7 +190,9 @@ Every 0.2 s:
 6. **Fuzzy decision:** 13 Mamdani rules over risk, uncertainty and waiting time give
    an acceptability Aₖ; > 0.7 accept, 0.4–0.7 proceed cautiously, ≤ 0.4 fall back.
    Ties go to the vehicle that arrives first, and "k goes" includes the CAVs queued
-   ahead of k in its lane. See `docs/fuzzy_layer.md`.
+   ahead of k in its lane. An option with R̂ ≥ 0.5 never proceeds, however long
+   the group has waited, and a CAV that has entered the conflict area keeps its
+   priority until it has cleared it. See `docs/fuzzy_layer.md`.
 
 ## V2X channel: delay and packet loss (optional)
 
