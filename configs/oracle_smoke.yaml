@@ -1,0 +1,12 @@
+# Quick check of the oracle upper bound (docs/oracle_baseline.md).
+# Tuning seeds only (100000-100002), never the evaluation seeds.
+name: oracle_smoke
+episodes: 3
+seed_offset: 100000
+noise_levels: [none, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+arbiters:
+  - {label: Oracle, kind: oracle}

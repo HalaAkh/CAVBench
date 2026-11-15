@@ -10,6 +10,7 @@ what happens in a single episode, or to save it as a video:
     python experiments/watch.py --arbiter codrivingllm_mock      # CoDrivingLLM as released, free
     python experiments/watch.py --arbiter codrivingllm           # CoDrivingLLM (needs the API key)
     python experiments/watch.py --v2x degraded --seed 3          # delayed / lost V2X messages
+    python experiments/watch.py --arbiter oracle --seed 3        # upper bound (perfect information)
     python experiments/watch.py --seed 3 --save videos/ucra_seed3.mp4   # or .gif
 
 The episode is exactly the one the experiments run for the same scenario,
@@ -52,6 +53,7 @@ ARBITERS = {  # short name -> (kind, params, label)
     "ucra_nofallback": ("whatif_fuzzy", {"use_fallback": False}, "UCRA without fallback"),
     "fcfs": ("fcfs", {}, "First come, first served"),
     "nocoord": ("no_coordination", {}, "No coordination"),
+    "oracle": ("oracle", {}, "Oracle (perfect information, upper bound)"),
     "llm": ("codrivingllm", {"model": "gpt-4o-mini"}, "CoDrivingLLM-style (gpt-4o-mini)"),
     "llm_mock": ("codrivingllm", {"model": "mock"}, "CoDrivingLLM-style (mock, no API)"),
     "llm_faithful": ("codrivingllm_faithful",
@@ -212,9 +214,10 @@ class Watcher:
         if not self.groups:
             return "No conflict: CAVs drive normally."
         llm = [e for e in now if "order" in e]
-        if llm:  # LLM coordinator: show its passing order
+        if llm:  # LLM coordinator or oracle: show its passing order
             return "   ||   ".join(
-                "LLM passing order: " + " > ".join(
+                ("Oracle" if e.get("mode", "").startswith("enum") else "LLM")
+                + " passing order: " + " > ".join(
                     (f"CAV {self.label[v]}" if v in self.label else f"car {v}") for v in e["order"])
                 for e in llm)
         log = [e for e in now if "acceptability" in e]
@@ -278,7 +281,7 @@ def main(argv=None) -> None:
     # Same seeding as cavbench.runner.run_episode (matched seeds).
     env.reset(seed=a.seed)
     arbiter.reset(seed=a.seed + 10_000_019)
-    if hasattr(arbiter, "attach"):  # CoDrivingLLM reproduction
+    if hasattr(arbiter, "attach"):  # CoDrivingLLM reproduction, oracle
         arbiter.attach(env)
     noise_rng = np.random.default_rng([a.seed, 2026])
     w = Watcher(env, arbiter, f"{a.scenario}  -  {title}", a.noise, a.seed, a.save, a.speed)
