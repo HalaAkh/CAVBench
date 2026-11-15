@@ -9,4 +9,5 @@ every: 5                # keep every 5th situation with at least 2 conflicting C
 reference_rollouts: 10000
 n_values: [25, 50, 100, 200]
 repeats: 50             # independent re-estimates per situation and N
+seed_offset: 1000      # episodes for the situations: fresh evaluation seeds 1000+
 seed: 7

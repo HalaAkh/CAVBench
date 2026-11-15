@@ -2,12 +2,14 @@
 # Same scenarios, noise levels, episodes and seeds as e1_baselines.yaml, and the
 # same name, so its rows go into results/e1_baselines.csv next to the other
 # methods (the runner appends and skips rows already there). The oracle ignores
-# the noise, so its results are the same at every noise level; all levels are
-# kept so that the table has the same shape.
+# the noise, so its results are the same at every noise level: it is run once
+# (noise "none") and those numbers are the upper bound at every level. Cost:
+# about 5 s per intersection, 1 min per merge and 10 min per dense episode on
+# one core, so these 600 episodes take roughly 4-5 h with 8 workers.
 name: e1_baselines
 episodes: 200
-seed_offset: 0
-noise_levels: [none, low, medium, high]
+seed_offset: 1000   # fresh evaluation seeds 1000+ (seeds 0-199 were used while developing; docs/paper_notes.md)
+noise_levels: [none]
 scenarios:
   - label: intersection
     scenario: intersection

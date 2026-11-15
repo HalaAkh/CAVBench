@@ -7,7 +7,7 @@
 # UCRA-noAge is the ablation without that.
 name: e6_v2x_channel
 episodes: 200
-seed_offset: 0
+seed_offset: 1000   # fresh evaluation seeds 1000+ (seeds 0-199 were used while developing; docs/paper_notes.md)
 noise_levels: [none, high]
 scenarios:
   - {label: intersection_v2x_ideal, scenario: intersection, env: {v2x_level: ideal}}

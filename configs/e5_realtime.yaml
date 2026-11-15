@@ -1,7 +1,7 @@
 # E5 (H4): decision time of the proposed method. Run with --workers 1.
 name: e5_realtime
 episodes: 30
-seed_offset: 0
+seed_offset: 1000   # fresh evaluation seeds 1000+ (seeds 0-199 were used while developing; docs/paper_notes.md)
 noise_levels: [none, high]
 scenarios:
   - label: intersection
