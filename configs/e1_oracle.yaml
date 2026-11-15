@@ -1,0 +1,22 @@
+# E1 upper bound: the oracle with perfect information (docs/oracle_baseline.md).
+# Same scenarios, noise levels, episodes and seeds as e1_baselines.yaml, and the
+# same name, so its rows go into results/e1_baselines.csv next to the other
+# methods (the runner appends and skips rows already there). The oracle ignores
+# the noise, so its results are the same at every noise level; all levels are
+# kept so that the table has the same shape.
+name: e1_baselines
+episodes: 200
+seed_offset: 0
+noise_levels: [none, low, medium, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+  - label: intersection_dense
+    scenario: intersection
+    env: {controlled_vehicles: 8, initial_vehicle_count: 14}
+  - label: merge
+    scenario: merge
+    env: {}
+arbiters:
+  - {label: Oracle, kind: oracle}

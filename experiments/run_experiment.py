@@ -56,6 +56,9 @@ METRIC_COLUMNS = [
     # MCTS baseline only:
     "mcts_iterations", "mcts_nodes", "mcts_pruned_fraction", "mcts_no_safe_root",
     "mcts_max_group_size",
+    # oracle (upper bound) only:
+    "oracle_orders_evaluated", "oracle_options_evaluated", "oracle_enum_share",
+    "oracle_replans", "oracle_cap_reached", "oracle_max_group_size",
 ]
 COLUMNS = KEY_COLUMNS + ["kind"] + METRIC_COLUMNS + ["wall_s"]
 

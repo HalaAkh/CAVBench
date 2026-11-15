@@ -60,7 +60,7 @@ python experiments/watch.py --seed 3 --save videos/ucra_seed3.mp4   # save a vid
 ```
 
 Options: `--scenario` (intersection, intersection_dense, merge), `--arbiter`
-(ucra, ucra_nou, ucra_nofallback, fcfs, nocoord, llm, llm_mock, llm_faithful,
+(ucra, ucra_nou, ucra_nofallback, fcfs, nocoord, oracle, llm, llm_mock, llm_faithful,
 llm_faithful_mock, mcts, mcts_strict), `--noise` (none, low,
 medium, high), `--seed`, `--speed` (playback speed), `--save` and `--no-trails`
 (the recent path of each car is drawn by default, as in CoDrivingLLM's videos). The episode is
@@ -206,6 +206,26 @@ nodes marked unsafe), `mcts_no_safe_root` (decisions with no safe option, where 
 least unsafe one was used) and `mcts_max_group_size`. The search runs in Python,
 so it is slow; see the run time in docs/mcts_baseline.md before starting E1.
 
+### Oracle (upper bound)
+
+`kind: oracle` is **not a realistic method**: it has perfect information, to show the
+best result reachable in each situation. It reads the true vehicle states (no noise,
+no V2X delay or loss) and tests each option on an exact copy of the running
+simulation (same human drivers, same random state). For a conflict group of up to 5
+CAVs it tries every passing order (K! orders, as the global-optimum reference of Xu
+et al., IEEE T-ITS 2020), each with the CAVs waiting for earlier human drivers or
+going before them, then follows the best one and re-plans every 2 s or when the
+group changes. Larger groups (dense scene) compare one option per CAV going
+first, plus "everyone yields", over 4 s. It is an upper bound with perfect
+information, not a proven global optimum; its results are the same at every noise
+level. Details and limitations: [docs/oracle_baseline.md](docs/oracle_baseline.md).
+
+```bash
+python experiments/run_experiment.py configs/oracle_smoke.yaml --workers 6   # quick check (tuning seeds)
+python experiments/watch.py --arbiter oracle --seed 3
+python experiments/run_experiment.py configs/e1_oracle.yaml --workers 8      # E1 rows -> results/e1_baselines.csv
+```
+
 ## Method in brief (UCRA)
 
 Every 0.2 s:
@@ -296,7 +316,7 @@ cavbench/
                  fcfs.py, no_coordination.py, codrivingllm_wrapper.py (LLM baseline),
                  llm_faithful.py (faithful-mode prompts and safety check),
                  llm_memory.py (memory of past decisions), mcts.py (MCTS baseline),
-                 commitment.py
+                 commitment.py, oracle.py (upper bound with perfect information)
   metrics/       safety.py (success, collisions, PET, speed)
   conflicts.py   ΔTTCP conflict detection and grouping
   geometry.py    routes as polylines, meeting points
@@ -307,6 +327,7 @@ experiments/     run_all.py, run_experiment.py, rollout_sensitivity.py,
 analysis/        statistics.ipynb
 docs/            fuzzy_layer.md, llm_baseline.md (faithful LLM mode vs the original),
                  mcts_baseline.md (MCTS baseline: adaptations and chosen values)
+                 oracle_baseline.md (the oracle upper bound)
 tests/           pytest suite
 third_party/     how to run the original CoDrivingLLM
 ```
