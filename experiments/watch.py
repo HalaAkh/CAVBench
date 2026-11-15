@@ -212,7 +212,13 @@ class Watcher:
         neg = [e for e in now if e.get("mode") == "negotiation"]
         if neg:  # faithful LLM mode: advisory passing order + each CAV's action
             name = lambda v: f"CAV {self.label[v]}" if v in self.label else f"car {v}"  # noqa: E731
-            adv = ", ".join(f"{name(f)} before {name(s)}" for f, s, _ in neg[-1]["decisions"])
+            def vid(x):  # faithful mode logs vehicle ids; the CoDrivingLLM
+                # reproduction logs the benchmark's names, e.g. "MDPVehicle #3"
+                if isinstance(x, str) and "#" in x:
+                    return int(x.split("#")[1])
+                return x
+            adv = ", ".join(f"{name(vid(d[0]))} before {name(vid(d[1]))}"
+                            for d in neg[-1]["decisions"])
             acts = " ".join(f"{name(e['vid'])}:{e['action']}" for e in now if e.get("mode") == "decision")
             return f"LLM advice: {adv or 'no conflicts'}   ||   decisions: {acts}"
         if not self.groups:
