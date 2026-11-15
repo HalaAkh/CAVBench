@@ -70,19 +70,21 @@ Human drivers cannot be ordered: the oracle does not control them, and in
 HighwayEnv they do not give way to crossing traffic. What the oracle can choose is
 whether the CAVs wait for them. Every candidate therefore comes in two versions:
 
-* **wait (FCFS-like):** besides the order, every CAV also waits for a human-driven
-  vehicle that would reach their first shared conflict point ahead **no later**
-  than the CAV, and that has not cleared it yet. Arrival times use the true states
-  and the same formula as the detector and FCFS: TTCP = d / max(speed, 1 m/s),
-  both vehicles within the 50 m reaction range;
+* **wait (yield at the conflict point):** besides the order, every CAV also
+  waits for a human-driven vehicle that would reach their first shared conflict
+  point ahead **no later** than the CAV, and that has not cleared it yet. Arrival
+  times use the true states and the same formula as the conflict detector:
+  TTCP = d / max(speed, 1 m/s), both vehicles within the 50 m reaction range;
 * **go:** the CAVs follow the order only, as in Xu et al. (all-CAV traffic).
 
 The copies decide which is better, with the same choice rule. We did this rather
-than always waiting (the simple option) for two reasons. First, the oracle can
-then never be worse than "FCFS towards human drivers" just because it did not try
-it: the FCFS-like version is always one of the candidates, and it wins all ties.
-Second, waiting is not always the safer choice. A CAV that is already close to the
-point and fast may be safer going through than braking in front of it, and only
+than always waiting (the simple option) for two reasons. First, waiting for human
+drivers is always one of the candidates and wins all ties, so the oracle never
+skips it just because it did not try it. (This rule waits only for the shared
+conflict point; the classical FCFS baseline is more cautious and waits until the
+whole conflict area is clear, see docs/fcfs_baseline.md.) Second, waiting is not
+always the safer choice. A CAV that is already close to the point and fast may be
+safer going through than braking in front of it, and only
 the copy shows which is true. Choosing the version per human driver instead of
 per candidate would multiply the candidates by 2 to the power of the number of
 drivers, which is too slow (Case-2-like scenes have 4 drivers).
@@ -222,35 +224,35 @@ number of evaluations in which a CAV outside the planned group crashed in the co
 
 ## Sanity check
 
-Oracle vs FCFS vs UCRA, **tuning seeds only** (100000 and up), noise none, lab PC
-with 15 episodes in parallel (so seconds per episode are slower than a single
-run). "PET-viol. eps" = episodes with at least one severe conflict (PET < 1.5 s).
+Oracle vs the classical FCFS baseline (docs/fcfs_baseline.md), run after merging
+the branch `fcfs-classic` (which also contains the HDV fix `fix-hdv-profile-leak`).
+**Tuning seeds only** (100000 and up), noise none and high, lab PC with 8 episodes
+in parallel (one per physical core). "Severe eps" = episodes with at least one
+severe conflict (PET < 1.5 s).
 
-| Scene | Method | Episodes | Success | Collisions | Time-outs | PET-viol. eps | Mean min PET [s] | Mean speed [m/s] | Decision ms mean / p95 | s / episode |
+| Scene | Noise | Method | Episodes | Success | Collisions | Time-outs | Severe eps | Mean min PET [s] | Mean speed [m/s] | Decision ms mean / p95 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| intersection | FCFS | 20 | 100 % | 0 | 0 | 0 | 2.92 | 5.68 | 3 / 12 | 1 |
-| intersection | UCRA | 20 | 95 % | 0 | 1 | 1 | 2.06 | 5.43 | 50 / 102 | 4 |
-| intersection | Oracle | 20 | 100 % | 0 | 0 | 0 | 2.98 | 5.92 | 758 / 2886 | 40 |
-| intersection_dense | FCFS | 8 | 100 % | 0 | 0 | 0 | 2.67 | 4.57 | 4 / 15 | 2 |
-| intersection_dense | UCRA | 8 | 100 % | 0 | 0 | 1 | 1.84 | 4.31 | 88 / 169 | 10 |
-| intersection_dense | Oracle | 8 | 100 % | 0 | 0 | 0 | 2.68 | 4.68 | 7048 / 32199 | 580 |
-| merge* | FCFS | 8 | 100 % | 0 | 0 | 0 | 2.40 | 5.96 | 1 / 2 | 1 |
-| merge* | UCRA | 8 | 100 % | 0 | 0 | 0 | 2.02 | 7.29 | 65 / 130 | 4 |
-| merge* | Oracle | 8 | 100 % | 0 | 0 | 0 | 1.98 | 8.15 | 837 / 3573 | 31 |
+| intersection | none | FCFS | 20 | 100 % | 0 | 0 | 0 | 3.81 | 3.94 | < 1 / < 1 |
+| intersection | none | Oracle | 20 | 100 % | 0 | 0 | 0 | 2.98 | 5.92 | 521 / 1949 |
+| intersection | high | FCFS | 20 | 100 % | 0 | 0 | 0 | 4.53 | 3.66 | < 1 / < 1 |
+| intersection | high | Oracle | 20 | 100 % | 0 | 0 | 0 | 2.98 | 5.92 | 521 / 1946 |
+| intersection_dense | none | FCFS | 8 | 100 % | 0 | 0 | 0 | 3.68 | 2.96 | < 1 / < 1 |
+| intersection_dense | none | Oracle | 8 | 100 % | 0 | 0 | 0 | 2.68 | 4.68 | 6897 / 33256 |
+| intersection_dense | high | FCFS | 8 | 75 % | 0 | 2 | 0 | 4.43 | 2.62 | < 1 / < 1 |
+| intersection_dense | high | Oracle | 8 | 100 % | 0 | 0 | 0 | 2.68 | 4.68 | 6833 / 32850 |
+| merge | none | FCFS | 8 | 100 % | 0 | 0 | 0 | 2.86 | 4.80 | < 1 / < 1 |
+| merge | none | Oracle | 8 | 100 % | 0 | 0 | 0 | 1.98 | 8.15 | 847 / 3591 |
+| merge | high | FCFS | 8 | 100 % | 0 | 0 | 0 | 3.50 | 4.44 | < 1 / < 1 |
+| merge | high | Oracle | 8 | 100 % | 0 | 0 | 0 | 1.98 | 8.15 | 829 / 3444 |
 
-\* The merge rows were re-run after merging the HDV fix (branch
-`fix-hdv-profile-leak`, commit 3373d31: the intersection no longer changes the
-shared human-driver class, which had changed merge episodes run after an
-intersection episode in the same worker). The intersection rows are not affected.
-
-The oracle is at least as good as FCFS on safety in every scene (no collision, no
-PET violation) and faster (higher mean speed). Before the human-driver candidates
-were added, it had a PET violation in 3 of 8 intersection episodes. In the merge
-scene its mean minimum PET is lower than FCFS's (1.98 s vs 2.40 s), still above
-1.5 s: it lets vehicles pass closer, which gives the higher speed (8.2 vs 6.0 m/s).
-At noise none FCFS is already very strong in these scenes, so the oracle's margin
-over it is small here; the difference is expected to grow with noise, which the
-oracle ignores.
+The oracle is at least as safe as FCFS in every row (no collision, no severe
+conflict) and much faster (1.5-1.8 times FCFS's mean speed); the only failures are
+two FCFS time-outs in the dense scene at high noise. The oracle lets vehicles pass
+closer than FCFS (mean minimum PET 2.0-3.0 s vs 2.9-4.5 s), still above 1.5 s:
+the classical FCFS serves one vehicle at a time and keeps large gaps. The oracle's
+results are identical at noise none and high (it ignores the noisy observation);
+only its decision time differs. Before the human-driver candidates were added, the
+oracle had a severe conflict in 3 of 8 intersection episodes (earlier check).
 
 ## Running it
 
