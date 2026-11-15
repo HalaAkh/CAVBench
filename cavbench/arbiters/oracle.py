@@ -128,7 +128,7 @@ def choose(results: list[dict], keys: tuple = CHOICE_KEYS) -> int:
 @dataclass
 class _Plan:
     """A passing order to follow. ``hdv_yield``: the CAVs also give way to human
-    drivers that would reach a shared conflict point earlier (FCFS-like)."""
+    drivers that would reach a shared conflict point earlier (yield at the conflict point)."""
     order: tuple
     hdv_yield: bool
     time: float
@@ -205,7 +205,7 @@ class OracleArbiter(Arbiter):
         self.plans = {k: p for k, p in self.plans.items() if k in keys}
         # Current plan of every group, used for the other groups' CAVs in the
         # copies: the stored plan or, if not planned yet, the arrival order with
-        # yielding to earlier human drivers (FCFS-like).
+        # yielding to earlier human drivers (yield at the conflict point).
         self.context = {frozenset(g.cavs): self.plans.get(frozenset(g.cavs))
                         or _Plan(self._arrival_order(g), True, obs.time) for g in groups}
         for g in groups:
@@ -253,7 +253,7 @@ class OracleArbiter(Arbiter):
         rank = {v: i for i, v in enumerate(self._arrival_order(g))}
         cands = self.candidates(g)
         results, best = [], None
-        for order, hdv_yield in cands:  # FCFS-like first: a good bound early prunes more
+        for order, hdv_yield in cands:  # "yield" first: a good bound early prunes more
             r = self.simulate_order(obs, g, order, best, hdv_yield)
             r["tiebreak"] = (tuple(rank[v] for v in order), 0 if hdv_yield else 1)
             results.append(r)
@@ -360,7 +360,7 @@ class OracleArbiter(Arbiter):
         return any(d_v >= 0.0 and d_p >= -margin for d_v, d_p in self._points(a, b))
 
     def hdv_blocks(self, obs, v: int) -> bool:
-        """FCFS-like rule for human drivers (true states): CAV v waits for a
+        """Yield-at-the-conflict-point rule for human drivers (true states): CAV v waits for a
         human-driven vehicle that would reach their first shared conflict point
         ahead no later than v (TTCP = d / max(speed, 1 m/s), both within the
         detector's reaction range) and has not cleared it yet."""

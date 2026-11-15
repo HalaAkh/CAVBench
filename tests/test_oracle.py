@@ -205,7 +205,7 @@ def test_other_arbiters_unchanged():
 
 
 def test_cavs_can_yield_to_human_drivers():
-    """Item 1: with hdv_yield a CAV waits (FCFS-like, true states) for a human
+    """Item 1: with hdv_yield a CAV waits (yield at the conflict point, true states) for a human
     driver that reaches the shared conflict point earlier; without it, it goes."""
     pa = _line(("test_c", "x"), (-50.0, 0.0), (50.0, 0.0))  # CAV 0, point near s = 49 m
     ph = _line(("test_h", "y"), (0.0, -50.0), (0.0, 50.0))  # human driver 9

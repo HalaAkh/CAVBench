@@ -1,4 +1,6 @@
-"""Scenario set-up: no vehicles start on top of each other."""
+"""Scenario set-up: no vehicles start on top of each other; the optional
+Case 2 set-up (hdv_per_approach) and the unchanged default scenes."""
+import hashlib
 import itertools
 
 import numpy as np
@@ -10,6 +12,7 @@ CASES = [
     ("merge", {}),
     ("intersection", {}),
     ("intersection", {"controlled_vehicles": 8, "initial_vehicle_count": 14}),
+    ("intersection", {"hdv_per_approach": 1}),
 ]
 
 
@@ -51,3 +54,42 @@ def test_intersection_does_not_change_other_scenarios_drivers():
     before = merge_result()
     run_episode(make_env("intersection", {}), make_arbiter("fcfs"), 100000)
     assert merge_result() == before
+
+
+def test_hdv_per_approach_gives_four_plus_four():
+    """Case 2 set-up: 4 CAVs + exactly 4 HDVs, one per approach, each 15-20 m
+    ahead of (closer to the junction than) the CAV on its approach."""
+    env = make_env("intersection", {"hdv_per_approach": 1, "spawn_during_episode": False})
+    for seed in range(100000, 100020):
+        env.reset(seed=seed)
+        cavs = list(env.controlled_vehicles)
+        hdvs = [v for v in env.road.vehicles if v not in cavs]
+        assert len(cavs) == 4 and len(hdvs) == 4, seed
+        assert sorted(v.lane_index[0] for v in hdvs) == ["o0", "o1", "o2", "o3"], seed
+        for h in hdvs:
+            cav = next(c for c in cavs if c.lane_index[0] == h.lane_index[0])
+            ahead = h.lane.local_coordinates(h.position)[0] - cav.lane.local_coordinates(cav.position)[0]
+            assert 15.0 - 1e-6 <= ahead <= 20.0 + 1e-6, (seed, ahead)
+            assert h.route[-1][1] != "o" + h.lane_index[0][1:], seed  # does not turn back
+
+
+def _scene_fingerprint(cfg):
+    env = make_env("intersection", cfg)
+    h = hashlib.sha256()
+    for seed in range(10):
+        env.reset(seed=seed)
+        for v in env.road.vehicles:
+            h.update(f"{v.position[0]:.6f},{v.position[1]:.6f},{v.speed:.6f},"
+                     f"{v.lane_index},{getattr(v, 'route', None)}|".encode())
+    return h.hexdigest()[:16]
+
+
+@pytest.mark.parametrize("cfg,expected", [
+    ({}, "3c0a95ac3d89bb9b"),
+    ({"controlled_vehicles": 8, "initial_vehicle_count": 14}, "1e8982c2900f4e4b"),
+])
+def test_default_intersection_scenes_unchanged(cfg, expected):
+    """hdv_per_approach is off by default: the existing scenes (positions,
+    speeds, routes of every vehicle, seeds 0-9) are exactly those recorded
+    before the option was added."""
+    assert _scene_fingerprint(cfg) == expected

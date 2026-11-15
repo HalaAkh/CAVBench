@@ -12,9 +12,9 @@ risk arbitration for connected autonomous vehicles with fuzzy decision-making"*
   share, at four levels;
 - **Arbiters:** the proposed method (UCRA), classical first-come-first-served
   (fixed arrival order, one vehicle in the conflict area at a time;
-  [docs/fcfs_baseline.md](docs/fcfs_baseline.md)), no coordination
-  and an LLM arbiter in the style of CoDrivingLLM, all using the same noisy shared
-  states and the same low-level safety layer;
+  [docs/fcfs_baseline.md](docs/fcfs_baseline.md)), no coordination, an LLM arbiter
+  in the style of CoDrivingLLM and a safety-critical multi-agent MCTS (Lin et al.,
+  2025), all using the same noisy shared states and the same low-level safety layer;
 - **Metrics:** success, collisions, post-encroachment time (PET < 1.5 s = severe
   conflict), average speed and decision time;
 - **Experiment protocol:** YAML configurations, matched random seeds, a parallel and
@@ -60,7 +60,8 @@ python experiments/watch.py --seed 3 --save videos/ucra_seed3.mp4   # save a vid
 ```
 
 Options: `--scenario` (intersection, intersection_dense, merge), `--arbiter`
-(ucra, ucra_nou, ucra_nofallback, fcfs, nocoord, oracle, llm, llm_mock), `--noise` (none, low,
+(ucra, ucra_nou, ucra_nofallback, fcfs, nocoord, oracle, llm, llm_mock, llm_faithful,
+llm_faithful_mock, mcts, mcts_strict), `--noise` (none, low,
 medium, high), `--seed`, `--speed` (playback speed), `--save` and `--no-trails`
 (the recent path of each car is drawn by default, as in CoDrivingLLM's videos). The episode is
 exactly the one the experiments run for the same settings.
@@ -86,7 +87,7 @@ Use `--episodes 20` for a quick trial. The experiments one by one:
 | Experiment | Config | Question |
 |---|---|---|
 | Smoke test | `configs/smoke.yaml` | does everything run? (2 episodes per condition) |
-| E1 | `configs/e1_baselines.yaml` + `configs/e1_llm.yaml` | UCRA vs the LLM coordinator, FCFS and no coordination (H1) |
+| E1 | `configs/e1_baselines.yaml` + `configs/e1_llm.yaml` + `configs/e1_mcts.yaml` (+ `e1_mcts_strict.yaml`) | UCRA vs the LLM coordinator, MCTS, FCFS and no coordination (H1) |
 | E2 | `configs/e2_uncertainty_ablation.yaml` | with vs without the uncertainty input U (H2) |
 | E3 | `configs/e3_fallback_ablation.yaml` | with vs without the fallback (H3) |
 | E4 | `configs/e4_rollout_sensitivity.yaml` | are N = 100 rollouts enough? (Theorem 1) |
@@ -168,6 +169,43 @@ gets the extra columns `llm_calls_negotiation`, `llm_calls_decision`,
 the embeddings. The key is read from `OPENAI_API_KEY` or the `.env` file, never
 from code or configs.
 
+### MCTS baseline (Lin et al., 2025)
+
+`kind: mcts` re-implements the safety-critical multi-agent Monte Carlo tree search
+of Lin, Lan, Anagnostopoulos, Tian and Flynn (*IEEE T-ITS* 26(11), 2025) from the
+paper, because the authors' MATLAB code is not public. For each conflict group,
+one tree search runs over the joint actions of the group's CAVs (SLOWER / IDLE /
+FASTER each, so 3^K children per node). It uses Table I's settings: 1000
+iterations, depth 8, UCB over the children that pass the V2V / V2H safety
+check, random safe rollouts, and the multi-objective reward. Like the paper, it
+treats the noisy shared states as exact. Every adaptation and every value the
+paper does not give is listed in [docs/mcts_baseline.md](docs/mcts_baseline.md).
+
+Two versions exist. `kind: mcts` is the **strict** version (Table I plus our
+earlier choices). `kind: mcts_calibrated` is the **main baseline**: the same
+algorithm and Table I values, with three calibrated values that the paper does not
+fix (acceleration and jerk costs on the paper's acceleration scale, w_v2v = 5 and
+w_v2h = 10). They were chosen on tuning seeds only: the first two so that the
+paper's Case 1 (4 CAVs, no human drivers: 0 % collisions) is reproduced, w_v2h
+with the Case 2 check (4 CAVs + 4 human drivers) and the normal intersection scene.
+See the section "Calibration" in docs/mcts_baseline.md.
+
+```bash
+python experiments/run_experiment.py configs/mcts_smoke.yaml --workers 6        # timing check
+python experiments/run_experiment.py configs/e1_mcts.yaml --workers 8           # E1, calibrated ("MCTS")
+python experiments/run_experiment.py configs/e1_mcts_strict.yaml --workers 8    # E1, strict ("MCTS-strict")
+python experiments/run_experiment.py configs/mcts_case1_check.yaml --workers 10 # Case 1 check, tuning seeds
+python experiments/run_experiment.py configs/mcts_case2_check.yaml --workers 10 # Case 2 check, tuning seeds
+python experiments/watch.py --arbiter mcts --seed 3          # calibrated (mcts_strict: strict)
+```
+
+Any `MCTSConfig` value can be changed in a config, e.g.
+`{label: MCTS-200, kind: mcts, params: {n_iterations: 200}}`. The CSV gets the
+extra columns `mcts_iterations`, `mcts_nodes`, `mcts_pruned_fraction` (share of
+nodes marked unsafe), `mcts_no_safe_root` (decisions with no safe option, where the
+least unsafe one was used) and `mcts_max_group_size`. The search runs in Python,
+so it is slow; see the run time in docs/mcts_baseline.md before starting E1.
+
 ### Oracle (upper bound)
 
 `kind: oracle` is **not a realistic method**: it has perfect information, to show the
@@ -210,7 +248,9 @@ Every 0.2 s:
 6. **Fuzzy decision:** 13 Mamdani rules over risk, uncertainty and waiting time give
    an acceptability Aₖ; > 0.7 accept, 0.4–0.7 proceed cautiously, ≤ 0.4 fall back.
    Ties go to the vehicle that arrives first, and "k goes" includes the CAVs queued
-   ahead of k in its lane. See `docs/fuzzy_layer.md`.
+   ahead of k in its lane. An option with R̂ ≥ 0.5 never proceeds, however long
+   the group has waited, and a CAV that has entered the conflict area keeps its
+   priority until it has cleared it. See `docs/fuzzy_layer.md`.
 
 ## V2X channel: delay and packet loss (optional)
 
@@ -275,8 +315,8 @@ cavbench/
   arbiters/      whatif_core.py (rollouts), fuzzy.py, whatif_fuzzy.py (UCRA),
                  fcfs.py, no_coordination.py, codrivingllm_wrapper.py (LLM baseline),
                  llm_faithful.py (faithful-mode prompts and safety check),
-                 llm_memory.py (memory of past decisions), commitment.py,
-                 oracle.py (upper bound with perfect information)
+                 llm_memory.py (memory of past decisions), mcts.py (MCTS baseline),
+                 commitment.py, oracle.py (upper bound with perfect information)
   metrics/       safety.py (success, collisions, PET, speed)
   conflicts.py   ΔTTCP conflict detection and grouping
   geometry.py    routes as polylines, meeting points
@@ -286,6 +326,7 @@ experiments/     run_all.py, run_experiment.py, rollout_sensitivity.py,
                  llm_check.py, build_llm_memory.py, watch.py (graphics)
 analysis/        statistics.ipynb
 docs/            fuzzy_layer.md, llm_baseline.md (faithful LLM mode vs the original),
+                 mcts_baseline.md (MCTS baseline: adaptations and chosen values)
                  oracle_baseline.md (the oracle upper bound)
 tests/           pytest suite
 third_party/     how to run the original CoDrivingLLM

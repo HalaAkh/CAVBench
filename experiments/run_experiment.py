@@ -53,6 +53,9 @@ METRIC_COLUMNS = [
     # faithful LLM mode only:
     "llm_calls_negotiation", "llm_calls_decision", "llm_calls_embedding",
     "memory_items", "memory_hits",
+    # MCTS baseline only:
+    "mcts_iterations", "mcts_nodes", "mcts_pruned_fraction", "mcts_no_safe_root",
+    "mcts_max_group_size",
     # oracle (upper bound) only:
     "oracle_orders_evaluated", "oracle_options_evaluated", "oracle_enum_share",
     "oracle_replans", "oracle_cap_reached", "oracle_max_group_size",

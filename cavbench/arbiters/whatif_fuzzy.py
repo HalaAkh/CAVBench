@@ -7,6 +7,15 @@ Steps 1-5 simulate every option; Step 6 decides with fuzzy inference:
     0.4 < A_k* <= 0.7 -> Cautious: it proceeds at a moderate constant speed
     A_k* <= 0.4       -> Reject:   fallback, conflicting CAVs slow down
 
+Hard risk cap: an option with R_hat >= risk_cap (0.5) never proceeds through
+the fuzzy decision, whatever A is (docs/fuzzy_layer.md). The CAV that had
+priority keeps it while it can no longer stop before its conflict point (also
+across fallback steps); such a CAV goes before one released by the deadlock
+breaker. The only ways past the cap are the two liveness rules for vehicles
+that are already stopped or committed: "clear" (a committed CAV leaves the
+conflict area if that is not riskier than everyone yielding) and the deadlock
+breaker below (near-contact risk <= 10 %).
+
 W is how long the group has been held in fallback. Ties in A are broken by
 lower R_hat, lower U, then earlier arrival. "k goes" includes the CAVs queued
 ahead of k in its lane. See commitment.py for priority persistence and for
@@ -41,7 +50,8 @@ class WhatIfFuzzyArbiter(Arbiter):
 
     def __init__(self, use_uncertainty: bool = True, use_fallback: bool = True,
                  a_low: float = A_LOW, a_high: float = A_HIGH,
-                 persistence_margin: float = 0.05, rollout: dict | None = None,
+                 persistence_margin: float = 0.05, risk_cap: float = 0.5,
+                 rollout: dict | None = None,
                  use_deadlock_breaker: bool = True, deadlock_wait: float = 2.0,
                  deadlock_clearance: float = 0.5, deadlock_risk: float = 0.1, **kw) -> None:
         super().__init__(**kw)
@@ -49,6 +59,7 @@ class WhatIfFuzzyArbiter(Arbiter):
         self.use_fallback = use_fallback
         self.a_low, self.a_high = a_low, a_high
         self.persistence_margin = persistence_margin
+        self.risk_cap = risk_cap  # an option with R_hat >= risk_cap never proceeds
         self.rollout = RolloutConfig(**(rollout or {}))
         self.fuzzy = FuzzyAcceptability()
         self.use_deadlock_breaker = use_deadlock_breaker
@@ -57,12 +68,13 @@ class WhatIfFuzzyArbiter(Arbiter):
         self.deadlock_risk = deadlock_risk
         self.wait: dict[int, float] = {}
         self.prev_goers: set[int] = set()
+        self.holders: set[int] = set()  # had priority and cannot stop any more
         self.released: set[int] = set()  # CAVs given the right of way by the deadlock breaker
         self.n_deadlock = 0
 
     def reset(self, seed=None) -> None:
         super().reset(seed)
-        self.wait, self.prev_goers, self.released = {}, set(), set()
+        self.wait, self.prev_goers, self.holders, self.released = {}, set(), set(), set()
         self.n_deadlock = 0
 
     def extra_metrics(self) -> dict:
@@ -74,7 +86,7 @@ class WhatIfFuzzyArbiter(Arbiter):
         return float(np.mean(np.asarray(r.d_min) < self.deadlock_clearance))
 
     def arbitrate(self, obs, groups):
-        actions, in_group, goers_now = {}, set(), set()
+        actions, in_group, goers_now, committed_all = {}, set(), set(), set()
         for g in groups:
             in_group.update(g.cavs)
             res = evaluate_options(obs, g, self.rollout, self.rng, include_fallback=True)
@@ -88,11 +100,27 @@ class WhatIfFuzzyArbiter(Arbiter):
             k = pick_with_persistence(acc, goers, prev, self.persistence_margin, True,
                                       [(risk[i], unc[i], arrival_time(g, goers[i]))
                                        for i in range(len(res))])
+            committed = committed_cavs(obs, g, self.rollout.a_yield)
+            committed_all.update(committed)
+            holder = next((v for v in g.cavs if v in self.holders and v in committed), None)
+            if holder is not None and holder in goers:
+                prev = holder
+            if prev in committed and prev in goers:
+                # The CAV that had priority keeps it while it can no longer stop
+                # before its conflict point: taking priority away would leave it
+                # standing in the conflict area, where it blocks the others.
+                k = goers.index(prev)
             mode = band(acc[k], self.a_low, self.a_high)
+            if self.use_fallback and risk[k] >= self.risk_cap:
+                # Hard cap: a long wait W may raise A, but never lets an option
+                # with a high estimated risk proceed (cf. docs/fuzzy_layer.md).
+                mode = "reject"
             if mode == "reject" and not self.use_fallback:
                 mode = "cautious"
             goer = res[k].goer
             held = next((v for v in g.cavs if v in self.released), None)
+            if holder is not None and holder != held:
+                held = None  # a CAV standing in the conflict area clears it first
             if held is not None and not (mode == "accept" and goer == held):
                 # keep the right of way given by the deadlock breaker, while safe
                 if self._contact_risk(res[goers.index(held)]) <= self.deadlock_risk:
@@ -101,10 +129,12 @@ class WhatIfFuzzyArbiter(Arbiter):
                     self.released.discard(held)
             if mode == "reject":
                 goer = None
-                committed = committed_cavs(obs, g, self.rollout.a_yield)
-                if committed:  # a CAV that cannot stop may clear the area, if safer
-                    c = min(committed, key=lambda v: res[goers.index(v)].risk)
-                    if res[goers.index(c)].risk < fb.risk:
+                if committed:  # a CAV that cannot stop may clear the area, unless
+                    # that is riskier than everyone yielding. Ties go to clearing:
+                    # a CAV standing in the conflict area otherwise blocks it for good.
+                    c = (holder if holder in committed and holder in goers
+                         else min(committed, key=lambda v: res[goers.index(v)].risk))
+                    if res[goers.index(c)].risk <= fb.risk:
                         goer, mode = c, "reject_clear"
             if mode == "reject" and self.use_deadlock_breaker and w >= self.deadlock_wait:
                 contact = [self._contact_risk(r) for r in res]
@@ -121,8 +151,13 @@ class WhatIfFuzzyArbiter(Arbiter):
                     actions[v] = FASTER
                 else:  # cautious / deadlock release: moderate constant speed
                     actions[v] = toward_speed(obs.states[v].target_speed, obs.v_mid)
-                rejected = mode.startswith("reject")
-                self.wait[v] = self.wait.get(v, 0.0) + obs.policy_dt if rejected else 0.0
+                # W grows while the group is held in fallback and is reset only
+                # when an option is accepted; a cautious step leaves it unchanged
+                # (resetting it there let W cycle below "Long" in a deadlock).
+                if mode.startswith("reject"):
+                    self.wait[v] = self.wait.get(v, 0.0) + obs.policy_dt
+                elif mode == "accept":
+                    self.wait[v] = 0.0
             if goer is not None:
                 goers_now.add(goer)
             self.log.append({
@@ -135,4 +170,9 @@ class WhatIfFuzzyArbiter(Arbiter):
                 self.wait[v] = 0.0
         self.released &= in_group  # the released CAV has left the conflict
         self.prev_goers = goers_now
+        # Priority survives fallback steps, and steps in which the holder is in no
+        # group, until the holder is in a group again but can still stop (i.e. it
+        # has not entered the conflict area) or has left the scene.
+        self.holders = goers_now | {v for v in self.holders if v in obs.cav_ids
+                                    and (v not in in_group or v in committed_all)}
         return actions
