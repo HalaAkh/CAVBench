@@ -10,10 +10,24 @@ going straight; actions SLOWER / IDLE / FASTER over target speeds 0, 4.5 and
 from __future__ import annotations
 
 import numpy as np
-from highway_env import utils
 from highway_env.envs.intersection_env import MultiAgentIntersectionEnv
+from highway_env.vehicle.behavior import IDMVehicle
 
 from .base import ARBITRATION_DEFAULTS, ArbitrationEnvMixin
+
+
+class IntersectionIDMVehicle(IDMVehicle):
+    """Human-driven vehicle with HighwayEnv's intersection settings.
+
+    HighwayEnv's intersection sets these values on the shared ``IDMVehicle``
+    class itself, which changes the human drivers of every scenario created
+    later in the same Python process (e.g. a merge episode run by the same
+    experiment worker). A subclass keeps them local to this scenario.
+    """
+
+    DISTANCE_WANTED = 7.0  # [m]
+    COMFORT_ACC_MAX = 6.0  # [m/s2]
+    COMFORT_ACC_MIN = -3.0  # [m/s2]
 
 
 class CAVIntersectionEnv(ArbitrationEnvMixin, MultiAgentIntersectionEnv):
@@ -35,6 +49,7 @@ class CAVIntersectionEnv(ArbitrationEnvMixin, MultiAgentIntersectionEnv):
                 "cav_wave_gap": 15.0,  # [m] between CAVs on the same approach
                 "exit_distance": 15.0,  # [m] benchmark value
                 "show_trajectories": False,
+                "other_vehicles_type": "cavbench.envs.intersection.IntersectionIDMVehicle",
             }
         )
         return config
@@ -61,10 +76,7 @@ class CAVIntersectionEnv(ArbitrationEnvMixin, MultiAgentIntersectionEnv):
 
     def _make_vehicles(self, n_vehicles: int = 10) -> None:
         rng = self.np_random
-        hdv = utils.class_from_path(self.config["other_vehicles_type"])
-        hdv.DISTANCE_WANTED = 7  # HighwayEnv intersection settings
-        hdv.COMFORT_ACC_MAX = 6
-        hdv.COMFORT_ACC_MIN = -3
+        # Human drivers: IntersectionIDMVehicle (see "other_vehicles_type").
 
         # Background (human-driven) vehicles, then 3 s of warm-up.
         for t in range(max(n_vehicles - 1, 0)):
