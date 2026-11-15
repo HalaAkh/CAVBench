@@ -99,10 +99,20 @@ def remaining_route(vehicle) -> list:
     """
     current = getattr(vehicle, "target_lane_index", None) or vehicle.lane_index
     route = list(getattr(vehicle, "route", None) or [])
+    out = [current] + route
     for i, lane in enumerate(route):
         if lane[:2] == current[:2]:
-            return [current] + route[i + 1 :]
-    return [current] + route
+            out = [current] + route[i + 1 :]
+            break
+    # HighwayEnv switches the followed lane to the next one 2.5 m before the
+    # end of the current lane. Until the vehicle has actually left that lane,
+    # keep it at the start of the route: otherwise the car's body is not on
+    # its own path (it seems to be at s = 0 of the next lane) and a vehicle
+    # queued behind it on the same lane is not seen as following it.
+    phys = vehicle.lane_index
+    if phys is not None and phys[:2] != current[:2] and phys[1] == current[0]:
+        out = [phys] + out
+    return out
 
 
 class PathCache:
