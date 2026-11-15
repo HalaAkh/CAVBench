@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -644,16 +645,20 @@ class ReproLLM:
         self._client = None
         self._lock = threading.Lock()
         self._cache: dict[str, str] = {}
-        self._path = (CACHE_DIR / f"codrivingllm_repro_{model}.jsonl"
-                      if cache and model != "mock" else None)
-        if self._path is not None and self._path.exists():
-            with self._path.open(encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        e = json.loads(line)
-                        self._cache[e["key"]] = e["reply"]
-                    except (ValueError, KeyError):
-                        continue
+        # One cache file per process: several experiment workers appending long
+        # lines to one shared file can interleave them (corrupted lines). All
+        # files codrivingllm_repro_<model>*.jsonl are read back.
+        self._path = None
+        if cache and model != "mock":
+            self._path = CACHE_DIR / f"codrivingllm_repro_{model}.{os.getpid()}.jsonl"
+            for path in sorted(CACHE_DIR.glob(f"codrivingllm_repro_{model}*.jsonl")):
+                with path.open(encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            e = json.loads(line)
+                            self._cache[e["key"]] = e["reply"]
+                        except (ValueError, KeyError):
+                            continue
 
     def _api(self, prompt: str) -> str:
         if self.model == "mock":
