@@ -206,7 +206,7 @@ number of evaluations in which a CAV outside the planned group crashed in the co
 * **Crashes of other vehicles in the copy.** For the reason above, a CAV outside
   the planned group can still crash in a copy. In the sanity check (tuning seeds,
   noise none) this happened in 207 evaluations in 20 intersection episodes,
-  1840 in 8 dense episodes and 19 in 8 merge episodes. So the rule "a collision
+  1840 in 8 dense episodes and 11 in 8 merge episodes. So the rule "a collision
   counts for a candidate only if a CAV of the group crashes" is still needed.
   Such a crash does not stop the copy: the crashed cars stay on the road as
   obstacles. It can still delay the group or block it in a way that would not
@@ -234,15 +234,20 @@ run). "PET-viol. eps" = episodes with at least one severe conflict (PET < 1.5 s)
 | intersection_dense | FCFS | 8 | 100 % | 0 | 0 | 0 | 2.67 | 4.57 | 4 / 15 | 2 |
 | intersection_dense | UCRA | 8 | 100 % | 0 | 0 | 1 | 1.84 | 4.31 | 88 / 169 | 10 |
 | intersection_dense | Oracle | 8 | 100 % | 0 | 0 | 0 | 2.68 | 4.68 | 7048 / 32199 | 580 |
-| merge | FCFS | 8 | 100 % | 0 | 0 | 0 | 2.05 | 6.02 | 1 / 2 | 1 |
-| merge | UCRA | 8 | 88 % | 0 | 1 | 0 | 2.22 | 6.39 | 60 / 103 | 7 |
-| merge | Oracle | 8 | 100 % | 0 | 0 | 0 | 1.80 | 8.00 | 854 / 3712 | 41 |
+| merge* | FCFS | 8 | 100 % | 0 | 0 | 0 | 2.40 | 5.96 | 1 / 2 | 1 |
+| merge* | UCRA | 8 | 100 % | 0 | 0 | 0 | 2.02 | 7.29 | 65 / 130 | 4 |
+| merge* | Oracle | 8 | 100 % | 0 | 0 | 0 | 1.98 | 8.15 | 837 / 3573 | 31 |
+
+\* The merge rows were re-run after merging the HDV fix (branch
+`fix-hdv-profile-leak`, commit 3373d31: the intersection no longer changes the
+shared human-driver class, which had changed merge episodes run after an
+intersection episode in the same worker). The intersection rows are not affected.
 
 The oracle is at least as good as FCFS on safety in every scene (no collision, no
 PET violation) and faster (higher mean speed). Before the human-driver candidates
 were added, it had a PET violation in 3 of 8 intersection episodes. In the merge
-scene its mean minimum PET is lower than FCFS's (1.80 s vs 2.05 s), still above
-1.5 s: it lets vehicles pass closer, which gives the higher speed (8.0 vs 6.0 m/s).
+scene its mean minimum PET is lower than FCFS's (1.98 s vs 2.40 s), still above
+1.5 s: it lets vehicles pass closer, which gives the higher speed (8.2 vs 6.0 m/s).
 At noise none FCFS is already very strong in these scenes, so the oracle's margin
 over it is small here; the difference is expected to grow with noise, which the
 oracle ignores.
