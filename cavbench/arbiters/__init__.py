@@ -4,6 +4,7 @@ from .codrivingllm_wrapper import CoDrivingLLMArbiter, CoDrivingLLMFaithfulArbit
 from .fcfs import FCFSArbiter
 from .fuzzy import A_HIGH, A_LOW, FuzzyAcceptability
 from .no_coordination import NoCoordinationArbiter
+from .oracle import OracleArbiter, OracleConfig
 from .whatif_core import OptionResult, RolloutConfig, evaluate_options
 from .whatif_fuzzy import WhatIfFuzzyArbiter
 
@@ -14,6 +15,7 @@ ARBITERS = {
     "codrivingllm": CoDrivingLLMArbiter,
     "codrivingllm_faithful": CoDrivingLLMFaithfulArbiter,  # mode="faithful"
     "codrivingllm_repro": CoDrivingLLMReproArbiter,  # CoDrivingLLM as released (use this one)
+    "oracle": OracleArbiter,  # upper bound with perfect information (docs/oracle_baseline.md)
 }
 
 
@@ -28,5 +30,5 @@ __all__ = [
     "WhatIfFuzzyArbiter", "FCFSArbiter", "NoCoordinationArbiter",
     "CoDrivingLLMArbiter", "CoDrivingLLMFaithfulArbiter", "CoDrivingLLMReproArbiter", "FuzzyAcceptability", "A_LOW",
     "A_HIGH", "RolloutConfig",
-    "OptionResult", "evaluate_options",
+    "OptionResult", "evaluate_options", "OracleArbiter", "OracleConfig",
 ]
