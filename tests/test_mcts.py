@@ -223,9 +223,12 @@ def test_comfort_scale_formula():
 
 # Actions of the strict MCTS (40 iterations) in the first 25 decisions of intersection seed
 # 100000, noise none, recorded with the version committed before the calibration (b4dccbe).
+# Snapshot of the strict MCTS's joint actions. Regenerated after the route fix in
+# cavbench/geometry.py (remaining_route keeps the lane a car is still on), which
+# changes the shared states every arbiter sees; MCTS itself is unchanged.
 STRICT_ACTIONS = ['2221', '2122', '2222', '2120', '2222', '2122', '2222', '2122', '2121',
                   '2121', '2222', '2222', '2222', '2122', '2222', '2222', '2221', '2122',
-                  '2221', '2122', '2121', '2221', '2220', '2120', '2220']
+                  '2221', '2221', '2222', '2221', '2120', '2220', '2121']
 
 
 def test_strict_kind_unchanged():

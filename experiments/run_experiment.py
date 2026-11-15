@@ -46,7 +46,7 @@ METRIC_COLUMNS = [
     "success", "collision", "all_arrived", "n_pet_pairs", "severe_conflicts",
     "any_severe_conflict", "min_pet", "avg_speed", "episode_time", "steps",
     "decision_ms_mean", "decision_ms_p95", "decision_ms_max", "n_decisions",
-    "n_fallback", "n_cautious",
+    "n_fallback", "n_cautious", "n_deadlock",
     # LLM baseline only (0 for the other arbiters):
     "llm_calls", "llm_cache_hits", "llm_tokens_in", "llm_tokens_out", "llm_cost_usd",
     "llm_failures", "llm_parse_failures",
