@@ -53,6 +53,9 @@ METRIC_COLUMNS = [
     # faithful LLM mode only:
     "llm_calls_negotiation", "llm_calls_decision", "llm_calls_embedding",
     "memory_items", "memory_hits",
+    # MCTS baseline only:
+    "mcts_iterations", "mcts_nodes", "mcts_pruned_fraction", "mcts_no_safe_root",
+    "mcts_max_group_size",
 ]
 COLUMNS = KEY_COLUMNS + ["kind"] + METRIC_COLUMNS + ["wall_s"]
 

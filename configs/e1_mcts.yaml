@@ -1,0 +1,29 @@
+# E1, MCTS baseline: safety-critical multi-agent MCTS (Lin et al., T-ITS 2025),
+# re-implemented from the paper, Table I settings (1000 iterations, depth 8), with the
+# CALIBRATION that reproduces the paper's Case 1 (kind "mcts_calibrated": comfort scale
+# a_med = 1.5 m/s^2, w_v2v = 5 and w_v2h = 10, chosen on tuning seeds only; see the section
+# "Calibration" in docs/mcts_baseline.md). The strict version: configs/e1_mcts_strict.yaml.
+# Same scenarios, noise levels and seeds as
+# e1_baselines.yaml, and the same results file (name: e1_baselines), so the
+# rows sit next to the other methods.
+#
+# This run is slow (about 1000 tree iterations per conflict group every 0.2 s,
+# in Python). Check the time first with configs/mcts_smoke.yaml, then:
+#     python experiments/run_experiment.py configs/e1_mcts.yaml --workers 8
+# Finished episodes are kept, so an interrupted run resumes where it stopped.
+name: e1_baselines
+episodes: 200
+seed_offset: 0
+noise_levels: [none, low, medium, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+  - label: intersection_dense
+    scenario: intersection
+    env: {controlled_vehicles: 8, initial_vehicle_count: 14}
+  - label: merge
+    scenario: merge
+    env: {}
+arbiters:
+  - {label: MCTS, kind: mcts_calibrated}
