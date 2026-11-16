@@ -45,6 +45,9 @@ KEY_COLUMNS = ["experiment", "scenario", "arbiter", "noise", "seed"]
 METRIC_COLUMNS = [
     "success", "collision", "all_arrived", "n_pet_pairs", "severe_conflicts",
     "any_severe_conflict", "min_pet", "avg_speed", "episode_time", "steps",
+    # CoDrivingLLM Table I metrics (docs/benchmark_metrics.md):
+    "collision_free", "bpet_sum", "bpet_n", "bpet_max", "bpet_min",
+    "vel_sum", "vel_n", "vel_max", "vel_min",
     "decision_ms_mean", "decision_ms_p95", "decision_ms_max", "n_decisions",
     "n_fallback", "n_cautious", "n_deadlock",
     # LLM baseline only (0 for the other arbiters):

@@ -7,7 +7,18 @@
   the conflict area and the second entering it (0 if they overlap). A PET
   below 1.5 s is a severe conflict;
 * average speed of the CAVs;
-* decision time of the arbiter (reported by the runner).
+* decision time of the arbiter (reported by the runner);
+* the metrics of CoDrivingLLM's Table I (Fang et al., 2025), so that results
+  can be put next to that paper's table (see docs/benchmark_metrics.md):
+    - collision_free: no CAV collision (the paper's "success": in its data,
+      episodes that reach the 50 s limit without a crash count as successes);
+    - benchmark PET: for each pair of vehicles (at least one a CAV) whose
+      routes cross, the time between the moments the two vehicles pass the
+      crossing point (closest approach to it), the paper's "Time Difference";
+      stored per episode as sum, count, max and min so that the average,
+      maximum and minimum over all pairs of all episodes can be computed;
+    - travel velocity: the average speed of each CAV while it is in the scene,
+      stored as sum, count, max and min over the episode's CAVs.
 
 PET is computed from trajectories recorded at the 15 Hz simulation rate. The
 conflict area is a disk of radius ``zone_radius`` around the point where the
@@ -62,6 +73,42 @@ def pet_values(env, df: pd.DataFrame | None = None, zone_radius: float = 3.0,
     return out
 
 
+def benchmark_pet_values(env, df: pd.DataFrame | None = None, zone_radius: float = 3.0,
+                         meet_distance: float = 1.0) -> list[float]:
+    """CoDrivingLLM-style PET: for each pair of vehicles (at least one a CAV)
+    whose routes cross (same pairs and crossing points as :func:`pet_values`),
+    |t_a - t_b|, where t is the time at which each vehicle is closest to the
+    crossing point (it must come within ``zone_radius`` of it)."""
+    df = trajectory_frame(env) if df is None else df
+    groups = {vid: g.sort_values("t") for vid, g in df.groupby("vid")}
+    vids = sorted(groups)
+    out = []
+    for ia, a in enumerate(vids):
+        for b in vids[ia + 1:]:
+            if not (env.vehicle_is_cav.get(a) or env.vehicle_is_cav.get(b)):
+                continue
+            pa, pb = env.vehicle_paths[a], env.vehicle_paths[b]
+            for mp in meeting_points(pa, pb, meet_distance):
+                if mp.s_i < 1.0 or mp.s_j < 1.0:
+                    continue  # car following, not a crossing
+                point = pa.position(mp.s_i)
+                times = []
+                for g in (groups[a], groups[b]):
+                    d = np.hypot(g["x"].to_numpy() - point[0], g["y"].to_numpy() - point[1])
+                    k = int(np.argmin(d))
+                    times.append(float(g["t"].to_numpy()[k]) if d[k] < zone_radius else None)
+                if None not in times:
+                    out.append(abs(times[0] - times[1]))
+                break
+    return out
+
+
+def travel_velocities(df: pd.DataFrame) -> list[float]:
+    """Average speed of each CAV over the frames it is in the scene."""
+    cav = df[df["is_cav"]]
+    return [float(g["speed"].mean()) for _, g in cav.groupby("vid")]
+
+
 def episode_metrics(env, pet_threshold: float = 1.5) -> dict:
     df = trajectory_frame(env)
     cav_crash = any(v.crashed for v in env.controlled_vehicles)
@@ -79,4 +126,20 @@ def episode_metrics(env, pet_threshold: float = 1.5) -> dict:
         "min_pet": float(pet_arr.min()) if len(pet_arr) else float("nan"),
         "avg_speed": float(cav_rows["speed"].mean()) if len(cav_rows) else float("nan"),
         "episode_time": float(df["t"].max()) if len(df) else 0.0,
+        **_benchmark_table_metrics(env, df, cav_crash),
+    }
+
+
+def _benchmark_table_metrics(env, df: pd.DataFrame, cav_crash: bool) -> dict:
+    bpet = np.array(benchmark_pet_values(env, df))
+    vel = np.array(travel_velocities(df))
+    nan = float("nan")
+    return {
+        "collision_free": bool(not cav_crash),
+        "bpet_sum": float(bpet.sum()), "bpet_n": int(len(bpet)),
+        "bpet_max": float(bpet.max()) if len(bpet) else nan,
+        "bpet_min": float(bpet.min()) if len(bpet) else nan,
+        "vel_sum": float(vel.sum()), "vel_n": int(len(vel)),
+        "vel_max": float(vel.max()) if len(vel) else nan,
+        "vel_min": float(vel.min()) if len(vel) else nan,
     }
