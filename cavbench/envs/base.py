@@ -10,11 +10,30 @@
   true states -> [V2X: delay + loss] -> [Gaussian noise] -> [dead reckoning]
   -> arbiter (dead reckoning moves each message forward by speed x age;
   ``v2x_compensate``, on by default);
-* stable integer ids for vehicles, and the benchmark's termination rules.
+* stable integer ids for vehicles, and the benchmark's termination rules;
+* ``benchmark_mode`` (default True): the simulation rules of the CoDrivingLLM
+  benchmark's simulator (its HighwayEnv copy) that decide what counts as a
+  crash and which traffic situations occur, so that results can be compared
+  directly with that paper (docs/benchmark_mode.md):
+    1. a collision is an overlap of the cars shrunk to 90 % (4.5 m x 1.8 m),
+       checked only when the centres are less than one car length apart;
+    2. (intersection) CAV exits are drawn from o1-o3 only;
+    5. a decision step stops at the simulation frame where the episode ends.
+  ``benchmark_mode: false`` gives CAVBench's stricter rules (full 5 m x 2 m
+  outlines, any exit). Two further benchmark rules exist but are OFF by
+  default, also in benchmark mode: 3. arrived CAVs and 4. human drivers past
+  the end of their route stay on the road. HighwayEnv then turns them round
+  at the end of the exit road and sends them back into the intersection, an
+  artefact that makes slower and faster methods fail for reasons unrelated
+  to coordination (docs/benchmark_mode.md); switch them on with
+  ``bm_keep_arrived`` / ``bm_keep_exited_hdvs``.
 """
 from __future__ import annotations
 
+from types import MethodType
+
 import numpy as np
+from highway_env import utils
 from highway_env.envs.common.abstract import AbstractEnv
 from highway_env.vehicle.controller import MDPVehicle
 
@@ -53,11 +72,39 @@ ARBITRATION_DEFAULTS = {
     "record_trajectories": True,
     "path_step": 0.5,
     "fast_observation": True,
+    "benchmark_mode": True,  # the CoDrivingLLM benchmark's simulation rules (see above)
+    # each rule can be switched on its own (None = follow benchmark_mode):
+    "bm_collision": None,  # rule 1
+    "bm_exits": None,  # rule 2
+    "bm_keep_arrived": False,  # rule 3 (off: U-turn artefact, see above)
+    "bm_keep_exited_hdvs": False,  # rule 4 (off: same artefact)
+    "bm_stop_at_end": None,  # rule 5
 }
+
+
+def benchmark_is_colliding(self, other, dt: float = 0.0):
+    """Collision test of the benchmark's HighwayEnv copy (Vehicle._is_colliding):
+    no test if the centres are more than one car length apart, otherwise the
+    cars' rectangles shrunk to 90 % must intersect. Returns HighwayEnv 1.12's
+    (intersecting, will_intersect, transition); the benchmark has no impact
+    prediction, so will_intersect is always False."""
+    no = (False, False, np.zeros(2))
+    if np.linalg.norm(other.position - self.position) > self.LENGTH:
+        return no
+    hit = utils.rotated_rectangles_intersect(
+        (self.position, 0.9 * self.LENGTH, 0.9 * self.WIDTH, self.heading),
+        (other.position, 0.9 * other.LENGTH, 0.9 * other.WIDTH, other.heading))
+    return (bool(hit), False, np.zeros(2))
 
 
 class ArbitrationEnvMixin:
     """Mixin for HighwayEnv environments used with CAVBench arbiters."""
+
+    def bm(self, rule: str) -> bool:
+        """Is benchmark-mode rule ``rule`` (e.g. "collision") on? A rule set to
+        True/False in the config wins; None follows ``benchmark_mode``."""
+        v = self.config.get(f"bm_{rule}")
+        return bool(self.config.get("benchmark_mode", True)) if v is None else bool(v)
 
     # -- configuration -------------------------------------------------
     @property
@@ -100,6 +147,9 @@ class ArbitrationEnvMixin:
         CAVehicle.ACC_LIMITS = tuple(self.config["cav_acc_limits"])
         for v in self.controlled_vehicles:
             v.__class__ = CAVehicle
+        if self.bm("collision"):
+            for v in self.road.vehicles:
+                v._is_colliding = MethodType(benchmark_is_colliding, v)
         self.path_cache = PathCache(self.road.network, self.config["path_step"])
         self._vid: dict[int, int] = {}
         self.vehicle_paths: dict = {}
@@ -144,6 +194,8 @@ class ArbitrationEnvMixin:
             self.steps += 1
             self.sim_time += dt
             self._record()
+            if self.bm("stop_at_end") and self._is_terminated():
+                break  # as the benchmark: stop at the frame where the episode ends
             if frame < frames - 1:
                 self._automatic_rendering()
         self.enable_auto_render = False
@@ -158,11 +210,14 @@ class ArbitrationEnvMixin:
     def _remove_arrived(self) -> None:
         """Arrived CAVs leave the scene (otherwise HighwayEnv loops them back
         into the network at the end of their route). Their objects stay in
-        ``controlled_vehicles`` so the action tuple keeps its length."""
+        ``controlled_vehicles`` so the action tuple keeps its length. With
+        ``bm_keep_arrived`` (off by default) they stay on the road, as in the
+        benchmark's simulator."""
         for v in self.controlled_vehicles:
             if v in self.road.vehicles and not v.crashed and self.has_arrived(v):
-                self.road.vehicles.remove(v)
                 self.arrived_vids.add(self.vid(v))
+                if not self.bm("keep_arrived"):
+                    self.road.vehicles.remove(v)
 
     def _remove_exited_hdvs(self) -> None:
         """Human-driven vehicles leave when they reach the end of their route."""
@@ -178,7 +233,8 @@ class ArbitrationEnvMixin:
     def arbitration_step(self, action):
         obs, reward, terminated, truncated, info = AbstractEnv.step(self, action)
         self._remove_crashed_hdvs()
-        self._remove_exited_hdvs()
+        if not self.bm("keep_exited_hdvs"):  # benchmark: they stay
+            self._remove_exited_hdvs()
         self._remove_arrived()
         info["cav_crashed"] = [bool(v.crashed) for v in self.controlled_vehicles]
         info["cav_arrived"] = [bool(self.has_arrived(v)) for v in self.controlled_vehicles]

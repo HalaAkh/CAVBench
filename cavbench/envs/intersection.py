@@ -119,7 +119,10 @@ class CAVIntersectionEnv(ArbitrationEnvMixin, MultiAgentIntersectionEnv):
         for ego_id in range(self.config["controlled_vehicles"]):
             origin = ego_id % 4
             lane = self.road.network.get_lane((f"o{origin}", f"ir{origin}", 0))
-            dest = self.config["destination"] or f"o{rng.choice([d for d in range(4) if d != origin])}"
+            # Benchmark mode: as in the benchmark's code ("o" + randint(1, 4)),
+            # a CAV never exits towards o0.
+            exits = range(1, 4) if self.bm("exits") else range(4)
+            dest = self.config["destination"] or f"o{rng.choice([d for d in exits if d != origin])}"
             if origin not in first_wave:
                 first_wave[origin] = (self.config["cav_start_mean"]
                                       + self.config["cav_start_std"] * rng.normal())
