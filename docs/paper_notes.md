@@ -79,3 +79,12 @@ the evaluation seeds (0-199) were not used before the final runs.
   HighwayEnv's shared human-driver class, so merge episodes run after an
   intersection episode in the same worker had different human drivers. Fixed
   (commit 3373d31); all final results use the fixed code.
+
+* **Benchmark mode (default):** all final results use the CoDrivingLLM
+  simulator's collision rule (footprints reduced to 90 %), its CAV routing
+  (no exit towards o0) and its end-of-step rule, for direct comparison with
+  that paper. Its two other rules (arrived CAVs and exited human drivers stay
+  on the road) are off because HighwayEnv turns those vehicles back into the
+  intersection (an artefact; numbers in `docs/benchmark_mode.md`). The 5 m/s
+  lane limit is not copied (HighwayEnv 1.12's human drivers would obey it,
+  theirs do not). `benchmark_mode: false` gives the stricter CAVBench rules.

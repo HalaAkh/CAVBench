@@ -233,7 +233,8 @@ STRICT_ACTIONS = ['2221', '2122', '2222', '2120', '2222', '2122', '2222', '2122'
 
 def test_strict_kind_unchanged():
     seed = 100000
-    env = make_env("intersection", {"noise_level": "none"})
+    # recorded with CAVBench's own rules (benchmark mode changes the scene)
+    env = make_env("intersection", {"noise_level": "none", "benchmark_mode": False})
     arb = make_arbiter("mcts", n_iterations=40)
     assert arb.cfg.a_med is None and arb.cfg.jerk_def == "rate"
     assert arb.cfg == MCTSConfig(n_iterations=40)  # strict defaults

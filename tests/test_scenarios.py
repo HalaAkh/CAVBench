@@ -74,7 +74,8 @@ def test_hdv_per_approach_gives_four_plus_four():
 
 
 def _scene_fingerprint(cfg):
-    env = make_env("intersection", cfg)
+    # recorded with CAVBench's own rules (benchmark mode draws CAV exits differently)
+    env = make_env("intersection", {**cfg, "benchmark_mode": False})
     h = hashlib.sha256()
     for seed in range(10):
         env.reset(seed=seed)
