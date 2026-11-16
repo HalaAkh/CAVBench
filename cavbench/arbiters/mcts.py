@@ -394,7 +394,7 @@ class SceneModel:
     def lookup(self, s, cols=None):
         """x, y, tx, ty at arc lengths ``s`` (..., M), or (..., len(cols)) for those vehicles."""
         u = np.minimum(np.maximum(s * (1.0 / GRID_DS), 0.0), self.g_max - 1e-9)
-        i0 = u.astype(np.int64)
+        i0 = np.minimum(u.astype(np.int64), self.g_max - 1)  # float32-safe (see whatif_core)
         w = (u - i0)[..., None]
         m = self.m_idx if cols is None else cols
         a = self.table[m, i0]
@@ -537,7 +537,7 @@ class SceneModel:
                 vh2 = vh * vh
                 a_h = self.idm_a * (1.0 - vh2 * vh2)
                 u = np.minimum(np.maximum(sD[:, LD] * (1.0 / GRID_DS), 0.0), self.g_max - 1e-9)
-                i0 = u.astype(np.int64)
+                i0 = np.minimum(u.astype(np.int64), self.g_max - 1)  # float32-safe
                 ta = self.table[dl["LD_full"], i0, :4]
                 xyt = ta + (self.table[dl["LD_full"], i0 + 1, :4] - ta) * (u - i0)[..., None]
                 part = np.concatenate([sD[:, LD, None], vD[:, LD, None], xyt], axis=-1)

@@ -340,7 +340,9 @@ def evaluate_options(
 
     for step in range(cfg.steps + 1):
         u = np.clip(s / GRID_DS, 0.0, g_max - 1e-9)
-        i0 = u.astype(np.int64)
+        # min(): in float32, g_max - 1e-9 rounds to g_max for vehicles at or past
+        # the end of their route (benchmark mode keeps them on the road)
+        i0 = np.minimum(u.astype(np.int64), g_max - 1)
         w = (u - i0)[..., None]
         xyt = table[m_idx, i0] * (1.0 - w) + table[m_idx, i0 + 1] * w
         x, y, tx, ty = xyt[..., 0], xyt[..., 1], xyt[..., 2], xyt[..., 3]
