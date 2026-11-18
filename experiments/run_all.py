@@ -1,6 +1,6 @@
 """Run every experiment of the paper, in order, with one command.
 
-    python experiments/run_all.py              # E4, E5, E2, E3, E1 (without the LLM), E6
+    python experiments/run_all.py              # E4, E5, E2, E3, E1 (without the LLM), E6, E7
     python experiments/run_all.py --with-llm   # also CoDrivingLLM for E1 (API key)
     python experiments/run_all.py --episodes 20   # quick trial with fewer seeds
 
@@ -44,6 +44,10 @@ def main(argv=None) -> None:
          run + [str(ROOT / "configs" / "e1_baselines.yaml"), "--workers", str(a.workers)] + ep),
         ("E6 V2X channel (H5): message delay and packet loss",
          run + [str(ROOT / "configs" / "e6_v2x_channel.yaml"), "--workers", str(a.workers)] + ep),
+        ("E7 sensitivity: UCRA's parameters one at a time",
+         run + [str(ROOT / "configs" / "e7_sensitivity.yaml"), "--workers", str(a.workers)] + ep),
+        ("E7b sensitivity: wrong noise assumption",
+         run + [str(ROOT / "configs" / "e7_noise_mismatch.yaml"), "--workers", str(a.workers)] + ep),
     ]
     if a.with_llm:
         steps.append(("E1 CoDrivingLLM baseline (as released, gpt-4o-mini)",
@@ -61,7 +65,7 @@ def main(argv=None) -> None:
             sys.exit(r.returncode)
         print(f"--- done in {(time.time() - t0) / 60:.1f} min", flush=True)
     print(f"\nAll done in {(time.time() - t_all) / 3600:.1f} h. "
-          f"Now open analysis/statistics.ipynb.")
+          f"Now run: python experiments/final_report.py")
     if not a.with_llm:
         print("CoDrivingLLM was not run: put your OpenAI key in .env, run the 2-episode cost "
               "check (top of configs/e1_codrivingllm.yaml), then 'python experiments/run_all.py "
