@@ -1,0 +1,44 @@
+# E7: sensitivity analysis of UCRA's hand-chosen parameters (one at a time).
+# Each variant changes ONE value up and down from the default; everything else
+# (seeds, scenes, noise, simulator rules) is identical. UCRA only: free, no API.
+# Seeds 1000-1049 (a subset of the evaluation seeds), intersection and dense
+# intersection, noise none and high: 17 variants x 200 episodes = 3400 episodes.
+#     python experiments/run_experiment.py configs/e7_sensitivity.yaml --workers 8
+# Analysis: python experiments/final_report.py (section "Sensitivity").
+name: e7_sensitivity
+episodes: 50
+seed_offset: 1000
+noise_levels: [none, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+  - label: intersection_dense
+    scenario: intersection
+    env: {controlled_vehicles: 8, initial_vehicle_count: 14}
+arbiters:
+  - {label: "UCRA (default)", kind: whatif_fuzzy}
+  # safety clearance d_safe = 2 m
+  - {label: "d_safe 1.5 m", kind: whatif_fuzzy, params: {rollout: {d_safe: 1.5}}}
+  - {label: "d_safe 2.5 m", kind: whatif_fuzzy, params: {rollout: {d_safe: 2.5}}}
+  # prediction horizon T = 4 s
+  - {label: "horizon 3 s", kind: whatif_fuzzy, params: {rollout: {horizon: 3.0}}}
+  - {label: "horizon 5 s", kind: whatif_fuzzy, params: {rollout: {horizon: 5.0}}}
+  # PET threshold 1.5 s
+  - {label: "PET 1.0 s", kind: whatif_fuzzy, params: {rollout: {pet_safe: 1.0}}}
+  - {label: "PET 2.0 s", kind: whatif_fuzzy, params: {rollout: {pet_safe: 2.0}}}
+  # fuzzy decision thresholds 0.4 / 0.7
+  - {label: "thresholds 0.35/0.65", kind: whatif_fuzzy, params: {a_low: 0.35, a_high: 0.65}}
+  - {label: "thresholds 0.45/0.75", kind: whatif_fuzzy, params: {a_low: 0.45, a_high: 0.75}}
+  # hard risk cap 0.5
+  - {label: "risk cap 0.4", kind: whatif_fuzzy, params: {risk_cap: 0.4}}
+  - {label: "risk cap 0.6", kind: whatif_fuzzy, params: {risk_cap: 0.6}}
+  # assumed probability that a human driver gives way, 0.5
+  - {label: "HDV give-way 0.3", kind: whatif_fuzzy, params: {rollout: {p_hdv_yield: 0.3}}}
+  - {label: "HDV give-way 0.7", kind: whatif_fuzzy, params: {rollout: {p_hdv_yield: 0.7}}}
+  # deadlock breaker waiting time 2 s
+  - {label: "deadlock wait 1 s", kind: whatif_fuzzy, params: {deadlock_wait: 1.0}}
+  - {label: "deadlock wait 3 s", kind: whatif_fuzzy, params: {deadlock_wait: 3.0}}
+  # number of rollouts N = 100 (accuracy in E4; here the effect on outcomes)
+  - {label: "N 50", kind: whatif_fuzzy, params: {rollout: {n_rollouts: 50}}}
+  - {label: "N 200", kind: whatif_fuzzy, params: {rollout: {n_rollouts: 200}}}

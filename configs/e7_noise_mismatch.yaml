@@ -1,0 +1,22 @@
+# E7b: what if UCRA's noise model is wrong? UCRA assumes a noise level that
+# differs from the true one (env setting assumed_noise):
+#   * scene "assumes low":  with true noise high -> over-confident (risk underestimated)
+#   * scene "assumes high": with true noise none -> over-cautious (risk overestimated)
+#   * scene "assumes true": the correct assumption (reference)
+# Over-confidence shows up as more collisions (missed dangers, false negatives),
+# over-caution as more waiting and time-outs (false alarms, false positives).
+# Seeds 1000-1099, intersection and dense intersection: 1200 episodes, free.
+#     python experiments/run_experiment.py configs/e7_noise_mismatch.yaml --workers 8
+name: e7_noise_mismatch
+episodes: 100
+seed_offset: 1000
+noise_levels: [none, high]
+scenarios:
+  - {label: "intersection | assumes true", scenario: intersection, env: {}}
+  - {label: "intersection | assumes low", scenario: intersection, env: {assumed_noise: low}}
+  - {label: "intersection | assumes high", scenario: intersection, env: {assumed_noise: high}}
+  - {label: "dense | assumes true", scenario: intersection, env: {controlled_vehicles: 8, initial_vehicle_count: 14}}
+  - {label: "dense | assumes low", scenario: intersection, env: {controlled_vehicles: 8, initial_vehicle_count: 14, assumed_noise: low}}
+  - {label: "dense | assumes high", scenario: intersection, env: {controlled_vehicles: 8, initial_vehicle_count: 14, assumed_noise: high}}
+arbiters:
+  - {label: UCRA, kind: whatif_fuzzy}
