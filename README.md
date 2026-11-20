@@ -1,23 +1,37 @@
 # CAVBench
 
-**A simulation environment for multi-CAV conflict arbitration under perception noise, with what-if simulation and fuzzy decisions.**
+**A simulation benchmark for multi-CAV conflict arbitration under noisy, delayed V2X data, with what-if simulation and fuzzy decisions.**
 
 CAVBench is the simulation environment of the study *"Uncertainty-aware counterfactual
 risk arbitration for connected autonomous vehicles with fuzzy decision-making"*
 (Kafel, El Akhrass and Watfa). It provides:
 
 - **Scenarios:** an unsignalized four-way intersection configured after the
-  CoDrivingLLM benchmark (Fang et al., 2025), a denser variant, and an on-ramp merge;
-- **Perception noise:** Gaussian noise on the positions and speeds that vehicles
-  share, at four levels;
-- **Arbiters:** the proposed method (UCRA), classical first-come-first-served
-  (fixed arrival order, one vehicle in the conflict area at a time;
-  [docs/fcfs_baseline.md](docs/fcfs_baseline.md)), no coordination, an LLM arbiter
-  in the style of CoDrivingLLM and a safety-critical multi-agent MCTS (Lin et al.,
-  2025), all using the same noisy shared states and the same low-level safety layer;
-- **Metrics:** success, collisions, post-encroachment time (PET < 1.5 s = severe
-  conflict), average speed and decision time;
-- **Experiment protocol:** YAML configurations, matched random seeds, a parallel and resumable runner, a statistics report (experiments/final_report.py) and the paper's figures (experiments/make_figures.py);
+  CoDrivingLLM benchmark (Fang et al., 2025), a denser variant (8 CAVs), and an
+  on-ramp merge, all with human-driven vehicles;
+- **Benchmark mode** (default): the CoDrivingLLM simulator's rules for what counts as
+  a crash and which traffic situations occur, so results can be compared with that
+  paper ([docs/benchmark_mode.md](docs/benchmark_mode.md));
+- **Imperfect shared data:** Gaussian noise on the positions and speeds that vehicles
+  share (four levels) and an optional V2X channel with delay and packet loss;
+- **Arbiters:** the proposed method (UCRA) and five baselines:
+  * no coordination (lower bound);
+  * classical first-come-first-served (FCFS), one vehicle in the conflict area at a
+    time ([docs/fcfs_baseline.md](docs/fcfs_baseline.md));
+  * CoDrivingLLM (Fang et al., IEEE T-VT 2025), **reproduced from the authors'
+    released code** and verified against it, run as released and with its memory
+    module ([docs/codrivingllm_repro.md](docs/codrivingllm_repro.md));
+  * safety-critical multi-agent MCTS (Lin et al., IEEE T-ITS 2025)
+    ([docs/mcts_baseline.md](docs/mcts_baseline.md));
+  * an oracle with perfect information (upper bound)
+    ([docs/oracle_baseline.md](docs/oracle_baseline.md));
+- **Metrics:** success (no collision and all CAVs arrived), collision-free rate,
+  collisions, time-outs, severe conflicts (PET < 1.5 s), episode time, speed, decision
+  time, and CoDrivingLLM's Table I metrics (PET and travel velocity, average / max /
+  min) ([docs/benchmark_metrics.md](docs/benchmark_metrics.md));
+- **Experiment protocol:** YAML configurations, matched random seeds, a parallel and
+  resumable runner, a statistics report with paired tests
+  (`experiments/final_report.py`) and the paper's figures (`experiments/make_figures.py`);
 - **Viewer:** watch any episode with its decisions, or save it as a video.
 
 CAVBench uses the open-source [HighwayEnv](https://github.com/Farama-Foundation/HighwayEnv)
@@ -42,7 +56,7 @@ from cavbench.arbiters import make_arbiter
 from cavbench.runner import run_episode
 
 env = make_env("intersection", {"noise_level": "high"})
-print(run_episode(env, make_arbiter("whatif_fuzzy"), seed=0))
+print(run_episode(env, make_arbiter("whatif_fuzzy"), seed=1000))
 ```
 
 ## Watching an episode
@@ -55,15 +69,17 @@ python experiments/watch.py                                   # UCRA, intersecti
 python experiments/watch.py --arbiter fcfs --seed 3           # another method / situation
 python experiments/watch.py --scenario intersection_dense --seed 7
 python experiments/watch.py --scenario merge --noise none
+python experiments/watch.py --arbiter codrivingllm_mock       # CoDrivingLLM pipeline, no API key
 python experiments/watch.py --seed 3 --save videos/ucra_seed3.mp4   # save a video (.mp4 or .gif)
 ```
 
 Options: `--scenario` (intersection, intersection_dense, merge), `--arbiter`
-(ucra, ucra_nou, ucra_nofallback, fcfs, nocoord, oracle, llm, llm_mock, llm_faithful,
-llm_faithful_mock, mcts, mcts_strict), `--noise` (none, low,
-medium, high), `--seed`, `--speed` (playback speed), `--save` and `--no-trails`
-(the recent path of each car is drawn by default, as in CoDrivingLLM's videos). The episode is
-exactly the one the experiments run for the same settings.
+(ucra, ucra_nou, ucra_nofallback, fcfs, nocoord, oracle, codrivingllm,
+codrivingllm_mock, mcts, mcts_strict, and the earlier LLM variants llm, llm_mock,
+llm_faithful, llm_faithful_mock), `--noise` (none, low, medium, high), `--v2x`
+(ideal, typical, degraded), `--seed`, `--speed` (playback speed), `--save` and
+`--no-trails` (the recent path of each car is drawn by default, as in CoDrivingLLM's
+videos). The episode is exactly the one the experiments run for the same settings.
 
 On screen: blue cars are human drivers; numbered cars are CAVs, coloured by the
 arbiter's command (green = go, yellow = cautious, orange = yield, red = crashed);
@@ -76,23 +92,26 @@ uncertainty U and fuzzy acceptability A.
 **Everything, with one command** (resumes where it stopped if interrupted):
 
 ```bash
-python experiments/run_all.py              # E4, E5, E2, E3, E1 without the LLM, and E6
-python experiments/run_all.py --with-llm   # the same, plus the LLM baseline (API key)
-python experiments/final_report.py     # tables and paired tests -> results/final_report.md
-python experiments/make_figures.py     # figures -> results/figures/ (PDF + PNG)
+python experiments/run_all.py              # E4, E5, E2, E3, E1 (without CoDrivingLLM), E6, E7, E7b
+python experiments/run_all.py --with-llm   # the same, plus CoDrivingLLM as released (API key)
+python experiments/final_report.py         # tables and paired tests -> results/final_report.md
+python experiments/make_figures.py         # figures -> results/figures/ (PDF + PNG)
 ```
 
-Use `--episodes 20` for a quick trial. The experiments one by one:
+MCTS, the oracle and CoDrivingLLM with memory are run separately (see their sections
+below), because they are slow or paid. Use `--episodes 20` for a quick trial.
 
 | Experiment | Config | Question |
 |---|---|---|
 | Smoke test | `configs/smoke.yaml` | does everything run? (2 episodes per condition) |
-| E1 | `configs/e1_baselines.yaml` + `configs/e1_llm.yaml` + `configs/e1_mcts.yaml` (+ `e1_mcts_strict.yaml`) | UCRA vs the LLM coordinator, MCTS, FCFS and no coordination (H1) |
-| E2 | `configs/e2_uncertainty_ablation.yaml` | with vs without the uncertainty input U (H2) |
-| E3 | `configs/e3_fallback_ablation.yaml` | with vs without the fallback (H3) |
+| E1 | `e1_baselines.yaml`, `e1_mcts.yaml`, `e1_oracle.yaml`, `e1_codrivingllm.yaml`, `e1_codrivingllm_memory_build.yaml` + `e1_codrivingllm_memory.yaml` | UCRA vs no coordination, FCFS, MCTS, CoDrivingLLM and the oracle (H1) |
+| E2 | `configs/e2_uncertainty_ablation.yaml` | ablation: with vs without the uncertainty input U (H2) |
+| E3 | `configs/e3_fallback_ablation.yaml` | ablation: with vs without the fallback (H3) |
 | E4 | `configs/e4_rollout_sensitivity.yaml` | are N = 100 rollouts enough? (Theorem 1) |
-| E5 | `configs/e5_realtime.yaml` | decision time (H4); run with `--workers 1` |
-| E6 | `configs/e6_v2x_channel.yaml` | V2X delay and packet loss (H5) |
+| E5 | `configs/e5_realtime.yaml` | decision time within the 0.2 s interval (H4); run with `--workers 1` |
+| E6 | `configs/e6_v2x_channel.yaml` | robustness to V2X delay and packet loss; age-aware spread ablation (H5) |
+| E7 | `configs/e7_sensitivity.yaml` | sensitivity: 8 parameters changed one at a time |
+| E7b | `configs/e7_noise_mismatch.yaml` | robustness: UCRA assumes a wrong noise level |
 
 ```bash
 python experiments/run_experiment.py configs/e1_baselines.yaml --workers 8
@@ -101,73 +120,65 @@ python experiments/rollout_sensitivity.py configs/e4_rollout_sensitivity.yaml
 ```
 
 Results are written to `results/<experiment>.csv`, one row per episode, and every
-method runs on the same seeds (same traffic, same noise samples). `--episodes N`
-overrides the number of seeds (200 by default, from the power analysis).
+method runs on the same seeds (same traffic, same noise samples). The reported
+results use **evaluation seeds from 1000 onwards**; seeds 0–199 and 100000+ were used
+for development and tuning. `--episodes N` overrides the number of seeds (200 by
+default, from the power analysis).
 
-### The LLM baseline (CoDrivingLLM-style)
+### Statistics and figures
 
-As in CoDrivingLLM, which compared all its baselines inside its own simulator, the
-LLM coordinator runs inside CAVBench on the same situations as the other methods.
-It calls `gpt-4o-mini` through the OpenAI API:
+`experiments/final_report.py` reads all result files and writes
+`results/final_report.md`: summary tables with Wilson 95 % intervals, paired tests
+of UCRA against each method on the same episodes (exact McNemar test for success,
+collisions and severe conflicts; Wilcoxon signed-rank test for episode time), the
+Table I format of CoDrivingLLM, the gap to the oracle, robustness, ablation,
+sensitivity and real-time results. Open it in VS Code (Ctrl+Shift+V) or on GitHub to
+see the tables formatted. `experiments/make_figures.py` draws the paper's figures
+from the same files into `results/figures/`.
 
-1. Create a key at platform.openai.com (Settings → Billing: add about $10 of credit;
-   API keys → Create new secret key). Never put the key in the code or on GitHub.
-2. `pip install openai`, then give CAVBench the key, either way:
-   * copy `.env.example` to `.env` (in the CAVBench folder) and write the key after
-     `OPENAI_API_KEY=`. The `.env` file is git-ignored, so it never goes to GitHub;
-   * or set the environment variable: Windows `setx OPENAI_API_KEY "sk-..."`
-     (reopen the terminal); Mac/Linux `export OPENAI_API_KEY=sk-...`.
-3. `python experiments/llm_check.py` makes one test call, runs 5 episodes and
-   estimates the cost and time of the full run.
-4. `python experiments/run_experiment.py configs/e1_llm.yaml --workers 8`, or
-   `python experiments/run_all.py --with-llm`. The rows go into the same
-   `results/e1_baselines.csv` as the other methods.
+### CoDrivingLLM (reproduced from its released code)
 
-Every reply is cached in `results/llm_cache/`, so an interrupted run resumes without
-paying twice; API errors are retried, and the run stops with a clear message if the
-key is wrong or the API is unreachable. The CSV records the calls, tokens and cost
-of each episode. To test the pipeline without a key, use the `mock` model
-(`configs/llm_mock.yaml`, or `python experiments/watch.py --arbiter llm_mock`), which
-answers with the arrival order. To run the original CoDrivingLLM code in its own
-simulator, see `third_party/README.md`.
+`kind: codrivingllm_repro` re-implements CoDrivingLLM's released code
+([FanGShiYuu/CoDrivingLLM](https://github.com/FanGShiYuu/CoDrivingLLM)) step by step:
+the negotiation call every step, one decision call per CAV with the authors' prompts
+and safety tools, their vehicle model (target speeds 0/5/10/15/20 m/s, 5 m/s cap at
+the intersection) and no extra safety layer, as released, with `gpt-4o-mini`. A test
+runs the original modules side by side with the reproduction at every step and
+checks that both send the same prompts and turn the same answers into the same
+actions (`tests/test_codrivingllm_repro.py`; it needs a local copy of the original
+repository in `third_party/CoDrivingLLM`, which is git-ignored because that
+repository has no licence). Remaining differences: [docs/codrivingllm_repro.md](docs/codrivingllm_repro.md).
 
-### LLM baseline: simple vs faithful mode
-
-The LLM arbiter has two modes (`params: {mode: ...}`, or `kind: codrivingllm_faithful`):
-
-| | simple (default) | faithful |
-|---|---|---|
-| When the LLM is called | only when a conflict exists | at **every** 0.2 s step |
-| Calls per step | 1 per conflict group | 1 negotiation + 1 decision **per CAV** |
-| What the LLM decides | the passing order → FASTER / SLOWER | advisory pair order, then each CAV's own action |
-| Action safety check | – | unsafe actions removed before each decision |
-| Memory (few-shot examples) | – | optional, `k = 2` similar past situations |
-| Calls per intersection episode | ≈ 25 | ≈ 200–400 (+1 embedding request per step with memory) |
-
-The faithful mode reproduces the CoDrivingLLM design (Fang et al., 2025) from the
-paper's description; the remaining differences are listed in
-[docs/llm_baseline.md](docs/llm_baseline.md). Because it calls the LLM about ten
-times more often, run `python experiments/llm_check.py --mode faithful` first: it
-estimates the cost and time of `configs/e1_llm_faithful.yaml` (intersection, noise
-none and high, 50 seeds).
-
-**Memory, built fairly.** The memory is built on separate *training* seeds (100000
-and up, never used for evaluation) and then frozen, so evaluation episodes stay
-independent and matched with the other methods:
+**API key.** Create a key at platform.openai.com and add credit. Never put the key
+in the code or on GitHub: copy `.env.example` to `.env` and write it after
+`OPENAI_API_KEY=` (`.env` is git-ignored), or set the environment variable.
 
 ```bash
-python experiments/build_llm_memory.py --model gpt-4o-mini   # 20 training episodes -> results/llm_memory/
-python experiments/llm_check.py --mode faithful              # cost / time estimate (uses the memory)
-python experiments/run_experiment.py configs/e1_llm_faithful.yaml --workers 8
+python experiments/run_experiment.py configs/codrivingllm_mock.yaml      # free pipeline test (mock model)
+python experiments/run_experiment.py configs/e1_codrivingllm.yaml --workers 4   # as released (0-shot)
 ```
 
-**Free test (no key, no network):** `configs/llm_faithful_mock.yaml`,
-`python experiments/watch.py --arbiter llm_faithful_mock`, or
-`python experiments/build_llm_memory.py --model mock` (local embeddings). The CSV
-gets the extra columns `llm_calls_negotiation`, `llm_calls_decision`,
-`llm_calls_embedding`, `memory_items` and `memory_hits`; `llm_cost_usd` includes
-the embeddings. The key is read from `OPENAI_API_KEY` or the `.env` file, never
-from code or configs.
+**With its memory module (2-shot).** The released code contains the paper's memory
+module but switches it off; its own comments say how to switch it on (line 46 builds
+the memory, line 159 retrieves the two most similar past decisions). CAVBench
+reproduces both functions line by line. The memory is built over 20 interaction
+episodes on tuning seeds (100000+), as in the paper's Fig. 7, then frozen:
+
+```bash
+python experiments/check_codrivingllm_memory.py            # one test call: key, credit, models (< $0.001)
+python experiments/run_experiment.py configs/e1_codrivingllm_memory_build.yaml --workers 4   # ~$1.4
+python experiments/check_codrivingllm_memory.py --memory   # must report 20 episodes
+python experiments/run_experiment.py configs/e1_codrivingllm_memory.yaml --workers 4         # ~$7
+```
+
+Every reply is cached in `results/llm_cache/` and the memory in `results/llm_memory/`,
+so an interrupted run resumes without paying twice. The CSV records the calls,
+tokens and cost of each episode.
+
+*Earlier LLM variants.* `kind: codrivingllm` (simple and faithful modes, written from
+the paper's description, with `experiments/llm_check.py` and
+`experiments/build_llm_memory.py`; see [docs/llm_baseline.md](docs/llm_baseline.md))
+were used during development. The paper uses the reproduction above.
 
 ### MCTS baseline (Lin et al., 2025)
 
@@ -185,26 +196,22 @@ Two versions exist. `kind: mcts` is the **strict** version (Table I plus our
 earlier choices). `kind: mcts_calibrated` is the **main baseline**: the same
 algorithm and Table I values, with three calibrated values that the paper does not
 fix (acceleration and jerk costs on the paper's acceleration scale, w_v2v = 5 and
-w_v2h = 10). They were chosen on tuning seeds only: the first two so that the
-paper's Case 1 (4 CAVs, no human drivers: 0 % collisions) is reproduced, w_v2h
-with the Case 2 check (4 CAVs + 4 human drivers) and the normal intersection scene.
-See the section "Calibration" in docs/mcts_baseline.md.
+w_v2h = 10), chosen on tuning seeds only so that the paper's Case 1 and Case 2
+results are reproduced. See "Calibration" in docs/mcts_baseline.md.
+
+MCTS needs several seconds per decision in Python, so the paper runs it on the
+intersection only, at noise levels none and high, with 100 seeds. Edit
+`configs/e1_mcts.yaml` accordingly (`noise_levels: [none, high]`, intersection only)
+before running:
 
 ```bash
 python experiments/run_experiment.py configs/mcts_smoke.yaml --workers 6        # timing check
-python experiments/run_experiment.py configs/e1_mcts.yaml --workers 8           # E1, calibrated ("MCTS")
-python experiments/run_experiment.py configs/e1_mcts_strict.yaml --workers 8    # E1, strict ("MCTS-strict")
-python experiments/run_experiment.py configs/mcts_case1_check.yaml --workers 10 # Case 1 check, tuning seeds
-python experiments/run_experiment.py configs/mcts_case2_check.yaml --workers 10 # Case 2 check, tuning seeds
-python experiments/watch.py --arbiter mcts --seed 3          # calibrated (mcts_strict: strict)
+python experiments/run_experiment.py configs/e1_mcts.yaml --episodes 100 --workers 8
+python experiments/watch.py --arbiter mcts --seed 3
 ```
 
-Any `MCTSConfig` value can be changed in a config, e.g.
-`{label: MCTS-200, kind: mcts, params: {n_iterations: 200}}`. The CSV gets the
-extra columns `mcts_iterations`, `mcts_nodes`, `mcts_pruned_fraction` (share of
-nodes marked unsafe), `mcts_no_safe_root` (decisions with no safe option, where the
-least unsafe one was used) and `mcts_max_group_size`. The search runs in Python,
-so it is slow; see the run time in docs/mcts_baseline.md before starting E1.
+The CSV gets the extra columns `mcts_iterations`, `mcts_nodes`,
+`mcts_pruned_fraction`, `mcts_no_safe_root` and `mcts_max_group_size`.
 
 ### Oracle (upper bound)
 
@@ -215,42 +222,45 @@ simulation (same human drivers, same random state). For a conflict group of up t
 CAVs it tries every passing order (K! orders, as the global-optimum reference of Xu
 et al., IEEE T-ITS 2020), each with the CAVs waiting for earlier human drivers or
 going before them, then follows the best one and re-plans every 2 s or when the
-group changes. Larger groups (dense scene) compare one option per CAV going
-first, plus "everyone yields", over 4 s. It is an upper bound with perfect
-information, not a proven global optimum; its results are the same at every noise
-level. Details and limitations: [docs/oracle_baseline.md](docs/oracle_baseline.md).
+group changes. Larger groups compare one option per CAV going first, plus "everyone
+yields", over 4 s. It is an upper bound with perfect information, not a proven
+global optimum; its results are the same at every noise level, so it is run at noise
+none. Details: [docs/oracle_baseline.md](docs/oracle_baseline.md).
 
 ```bash
-python experiments/run_experiment.py configs/oracle_smoke.yaml --workers 6   # quick check (tuning seeds)
-python experiments/watch.py --arbiter oracle --seed 3
-python experiments/run_experiment.py configs/e1_oracle.yaml --workers 8      # E1 rows -> results/e1_baselines.csv
+python experiments/run_experiment.py configs/oracle_smoke.yaml --workers 6
+python experiments/run_experiment.py configs/e1_oracle.yaml --workers 8
 ```
 
 ## Method in brief (UCRA)
 
 Every 0.2 s:
 
-1. **Observe** the shared states with noise: ŝᵢ = sᵢ + εᵢ, εᵢ ~ N(0, σ²).
-2. **Detect conflicts:** routes that meet, with ΔTTCP = |dᵢ/vᵢ − dⱼ/vⱼ| < 8 s. A vehicle
-   counts as past a conflict point only once it is 4.5 m + 2σ beyond it, so position
-   noise cannot make a conflict disappear for a moment.
+1. **Observe** the shared states with noise: p̂ᵢ = pᵢ + εᵢ, εᵢ ~ N(0, σ_p²), v̂ᵢ = vᵢ + νᵢ,
+   νᵢ ~ N(0, σ_v²); with V2X delay or loss, each message is moved forward by dead
+   reckoning.
+2. **Detect conflicts:** routes that meet within 1 m, both vehicles within 50 m of the
+   point, and ΔTTCP = |dᵢ/vᵢ − dⱼ/vⱼ| < 8 s. A vehicle counts as past a conflict point
+   only once it is 4.5 m + 2σ_p beyond it. Conflicting CAVs form groups.
 3. **Candidate maneuvers:** one per conflicting CAV (it goes, the others yield),
    plus the fallback (everyone yields).
-4. **What-if rollouts:** N = 100 simulations of each maneuver over T = 4 s, starting
-   from the shared states plus imagined errors of at least σ_min (0.5 m, 0.3 m/s),
-   so that the futures differ even with perfect perception. Human drivers follow IDM
-   with their own desired speed in each rollout, and each one may give way: with
-   probability 0.5 it follows the road's priority rule (stops when a conflict with a
-   higher-priority or leading vehicle is predicted within 3 s), otherwise it drives on.
-5. **Risk and uncertainty:** R̂ₖ = share of rollouts that are dangerous: two vehicles
-   come within 2 m (three-circle footprints) **or** pass a conflict area less than
-   1.5 s apart (PET, as in the evaluation); Uₖ = std of the closest gap / 5 m.
+4. **What-if rollouts:** N = 100 simulations of each maneuver over T = 4 s (Δt = 0.1 s),
+   starting from the shared states plus imagined errors of at least 0.5 m and
+   0.3 m/s, growing with message age. Human drivers follow IDM with their own desired
+   speed in each rollout and give way with probability 0.5. All maneuvers use the same
+   random draws.
+5. **Risk and uncertainty:** R̂ₖ = share of dangerous rollouts (two vehicles within
+   2 m, three-circle footprints, **or** PET < 1.5 s); Uₖ = std of the closest gap / 5 m.
+   Theorem 1 (Hoeffding + union bound) gives N ≥ 98 for accuracy 0.15 with probability
+   0.9 over four maneuvers.
 6. **Fuzzy decision:** 13 Mamdani rules over risk, uncertainty and waiting time give
-   an acceptability Aₖ; > 0.7 accept, 0.4–0.7 proceed cautiously, ≤ 0.4 fall back.
-   Ties go to the vehicle that arrives first, and "k goes" includes the CAVs queued
-   ahead of k in its lane. An option with R̂ ≥ 0.5 never proceeds, however long
-   the group has waited, and a CAV that has entered the conflict area keeps its
-   priority until it has cleared it. See `docs/fuzzy_layer.md`.
+   an acceptability Aₖ; > 0.7 accept, 0.4–0.7 proceed cautiously, ≤ 0.4 fall back. An
+   option with R̂ ≥ 0.5 never proceeds. See `docs/fuzzy_layer.md`.
+7. **Liveness rules:** the previous choice is kept unless clearly worse (margin 0.05);
+   a CAV that can no longer stop keeps priority until it has cleared the area; after
+   2 s in fallback, the deadlock breaker releases the CAV with the lowest near-contact
+   probability (< 0.5 m in at most 10 % of rollouts).
+8. **Safety layer:** the shared car-following check, then the actions are sent.
 
 ## V2X channel: delay and packet loss (optional)
 
@@ -270,9 +280,9 @@ true states -> [V2X: delay + loss] -> [Gaussian noise] -> [dead reckoning] -> ar
   (`v2x_compensate: false` turns it off).
 * **Age-aware uncertainty** (UCRA): in the rollouts, each vehicle's imagined error
   grows with the age of its message,
-  σ_s(age)² = σ² + (σ_v·age)² + (a·age²/2)², σ_v(age)² = σ_v² + (a·age)², a = 3 m/s²,
-  so stale information counts as less certain (`rollout: {age_aware: false}` turns
-  it off; this is the UCRA-noAge ablation).
+  σ_s(age)² = σ_p² + (σ_v·age)² + (a·age²/2)², σ_v(age)² = σ_v² + (a·age)², a = 3 m/s²,
+  with σ_p ≥ 0.5 m and σ_v ≥ 0.3 m/s, so stale information counts as less certain
+  (`rollout: {age_aware: false}` turns it off; this is the UCRA-noAge ablation).
 
 | Level | delay | loss probability | Meaning |
 |---|---|---|---|
@@ -289,47 +299,63 @@ env: {v2x_delay: 0.2, v2x_loss: 0.05}   # explicit values (override the level)
 ```
 
 The age of the message used for each vehicle is in `obs.extra["v2x_age"]`. To watch
-an episode: `python experiments/watch.py --v2x degraded`. Experiment E6
-(`configs/e6_v2x_channel.yaml`) compares the three levels. The loss randomness uses
+an episode: `python experiments/watch.py --v2x degraded`. The loss randomness uses
 its own random generator, so the perception-noise samples stay matched across
 experiments, and the ideal channel gives **identical results** to running without it.
 
 ## Low-level safety layer
 
-All arbiters share the same low-level layer, so that differences come from the
-arbitration. By default (`safety: follow`) it performs **car-following only**:
-a CAV brakes behind a vehicle travelling the same way in its lane, in a merging
-lane or in a lane that diverges from it. **Crossing conflicts are resolved only by
-the arbiter**, as in the CoDrivingLLM benchmark. The following gap is measured
-from noisy positions, so it includes a margin of 2·√2·σ (4.2 m at high noise) that
-stops position errors from letting a CAV creep into the car ahead. With `params: {safety: full}` in a
-config, CAVs also brake for any vehicle physically on their path ahead, including
-crossing traffic; this stronger layer can hide arbitration errors.
+UCRA, FCFS, MCTS, the oracle and no coordination share the same low-level layer, so
+that differences come from the arbitration. CoDrivingLLM is run as released, with
+its own safety tools and no extra layer. By default (`safety: follow`) the layer
+performs **car-following only**: a CAV brakes behind a vehicle travelling the same
+way in its lane, in a merging lane or in a lane that diverges from it. **Crossing
+conflicts are resolved only by the arbiter**, as in the CoDrivingLLM benchmark. The
+following gap is measured from noisy positions, so it includes a margin of 2·√2·σ_p
+(4.2 m at high noise). With `params: {safety: full}` in a config, CAVs also brake for
+any vehicle physically on their path ahead, including crossing traffic; this
+stronger layer can hide arbitration errors.
+
+## Main results (evaluation seeds 1000+)
+
+| Method | Category | Success | Notes |
+|---|---|---|---|
+| UCRA | proposed | 98.6 % (3 scenarios, 2400 episodes) | 37 % faster than FCFS; decides in 56–98 ms |
+| FCFS | classic | 95.6 % | 1 collision but 105 time-outs; 83.7 % at high noise, 88 % in dense traffic |
+| MCTS | latest | 96.5 % (intersection) | as safe as UCRA, 6 % faster, but about 8 s per decision |
+| CoDrivingLLM | latest | 56 % as released, 65 % with memory (intersection) | 40 % on its own 20-seed protocol, as reported in its paper |
+| Oracle | upper bound | 99.0 % | UCRA reaches 78–96 % of its efficiency |
+
+Full tables, paired tests and the robustness, ablation and sensitivity analyses:
+`results/final_report.md`.
 
 ## Repository layout
 
 ```
 cavbench/
-  envs/          intersection.py, merge.py, base.py (noise, trajectories, termination)
+  envs/          intersection.py, merge.py, base.py (noise, benchmark mode, trajectories, termination)
   noise/         gaussian.py (four noise levels), v2x.py (optional V2X delay + packet loss)
   arbiters/      whatif_core.py (rollouts), fuzzy.py, whatif_fuzzy.py (UCRA),
-                 fcfs.py, no_coordination.py, codrivingllm_wrapper.py (LLM baseline),
-                 llm_faithful.py (faithful-mode prompts and safety check),
-                 llm_memory.py (memory of past decisions), mcts.py (MCTS baseline),
-                 commitment.py, oracle.py (upper bound with perfect information)
-  metrics/       safety.py (success, collisions, PET, speed)
+                 fcfs.py, no_coordination.py, mcts.py (MCTS baseline),
+                 oracle.py (upper bound with perfect information),
+                 codrivingllm_repro.py (CoDrivingLLM reproduced, with its memory module),
+                 codrivingllm_wrapper.py, llm_faithful.py, llm_memory.py (earlier LLM variants),
+                 commitment.py
+  metrics/       safety.py (success, collisions, PET, speed, Table I metrics)
   conflicts.py   ΔTTCP conflict detection and grouping
   geometry.py    routes as polylines, meeting points
   runner.py      one episode with matched seeds
 configs/         experiment configurations (YAML)
 experiments/     run_all.py, run_experiment.py, rollout_sensitivity.py,
-                 llm_check.py, build_llm_memory.py, watch.py (graphics)
-analysis/        statistics.ipynb
-docs/            fuzzy_layer.md, llm_baseline.md (faithful LLM mode vs the original),
-                 mcts_baseline.md (MCTS baseline: adaptations and chosen values)
-                 oracle_baseline.md (the oracle upper bound)
+                 final_report.py (tables and paired tests), make_figures.py (figures),
+                 benchmark_table.py (CoDrivingLLM Table I format),
+                 check_codrivingllm_memory.py, llm_check.py, build_llm_memory.py,
+                 watch.py (graphics)
+docs/            benchmark_mode.md, benchmark_metrics.md, codrivingllm_repro.md,
+                 fcfs_baseline.md, fuzzy_layer.md, llm_baseline.md, mcts_baseline.md,
+                 oracle_baseline.md, paper_notes.md
 tests/           pytest suite
-third_party/     how to run the original CoDrivingLLM
+third_party/     how to run the original CoDrivingLLM (the code itself is not included)
 ```
 
 ## Noise levels
@@ -344,8 +370,11 @@ third_party/     how to run the original CoDrivingLLM
 ## Citation
 
 If you use CAVBench, please cite the accompanying paper (details to be added on
-publication) and HighwayEnv (Leurent, 2018).
+publication), HighwayEnv (Leurent, 2018) and, for the CoDrivingLLM baseline,
+Fang et al. (2025).
 
 ## Licence
 
-MIT, see `LICENSE`. CoDrivingLLM is not included (its repository has no licence).
+MIT, see `LICENSE`. CoDrivingLLM's code is not included (its repository has no
+licence); the reproduction cites its source and reuses its prompts only to reproduce
+the published method.
