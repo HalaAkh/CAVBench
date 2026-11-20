@@ -1,0 +1,26 @@
+# CoDrivingLLM with its memory module, step 1 of 2: BUILD the memory.
+# The released code switches the memory off; its own comments say how to switch
+# it on: first activate memory_update (line 46 of llm_agent_action.py) to "build
+# your own database" during interactions, then activate relative_memory
+# (line 159) to use it. This step does line 46: CoDrivingLLM runs as released
+# (no retrieval) and every decision is stored with the benchmark's comment.
+# The paper's Fig. 7 shows the intersection success rising with the number of
+# interactions (20+ interactions); we use 20 episodes on TUNING seeds 100000+,
+# never used for evaluation, without noise (the paper's setting).
+# Cost: about $1.4 (gpt-4o-mini). Memory files: results/llm_memory/repro_intersection.*.jsonl
+#     python experiments/run_experiment.py configs/e1_codrivingllm_memory_build.yaml --workers 4
+# Then run configs/e1_codrivingllm_memory.yaml.
+name: codrivingllm_memory_build
+episodes: 20
+seed_offset: 100000
+noise_levels: [none]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+arbiters:
+  - label: CoDrivingLLM-build
+    kind: codrivingllm_repro
+    params:
+      model: gpt-4o-mini
+      memory: {mode: build, name: intersection}

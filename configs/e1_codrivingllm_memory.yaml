@@ -1,0 +1,23 @@
+# CoDrivingLLM with its memory module, step 2 of 2: EVALUATE with the memory.
+# Line 159 of llm_agent_action.py activated: the two most similar stored
+# decisions (top_k=2, the "2-shot" of the paper's Table I) are added to every
+# decision prompt. The memory built in step 1 is frozen (not updated here).
+# Same seeds and noise levels as configs/e1_codrivingllm.yaml, so the results
+# pair episode by episode with UCRA and with CoDrivingLLM without memory, and
+# the same results file (name: e1_baselines).
+# Cost: about $7 (gpt-4o-mini) plus a few cents of embeddings.
+#     python experiments/run_experiment.py configs/e1_codrivingllm_memory.yaml --workers 4
+name: e1_baselines
+episodes: 50
+seed_offset: 1000
+noise_levels: [none, high]
+scenarios:
+  - label: intersection
+    scenario: intersection
+    env: {}
+arbiters:
+  - label: CoDrivingLLM-memory
+    kind: codrivingllm_repro
+    params:
+      model: gpt-4o-mini
+      memory: {mode: use, name: intersection}
