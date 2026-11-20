@@ -138,6 +138,12 @@ def s_e1(out: list[str], e1: pd.DataFrame) -> None:
     out.append("\"first only / second only\" = episodes where only the first (or only the second) method "
                "had that outcome. McNemar exact test on those episodes; "
                "Wilcoxon signed-rank test on episode time.\n")
+    if {"CoDrivingLLM", "CoDrivingLLM-memory"} <= set(e1["arbiter"]):
+        out.append("### CoDrivingLLM with its memory module (2-shot) against as released (0-shot)\n")
+        r = paired(e1, "CoDrivingLLM-memory", "CoDrivingLLM")
+        out.append(md(pd.DataFrame([r])) + "\n")
+        out.append("Reported by Fang et al. (2025) for the intersection: 40 % with no interactions, 75 % after "
+                   "20+ interactions (their Fig. 7), 90 % in their Table I (2-shot, 20 episodes).\n")
 
 
 def s_table1(out: list[str], e1: pd.DataFrame) -> None:
@@ -185,7 +191,7 @@ def s_oracle(out: list[str], e1: pd.DataFrame) -> None:
 def s_robust(out: list[str], e1: pd.DataFrame, e6: pd.DataFrame | None) -> None:
     out.append("## 5. Robustness\n")
     out.append("### Perception noise (E1)\n")
-    keep = [m for m in ["UCRA", "FCFS", "MCTS", "CoDrivingLLM", "Oracle"] if m in set(e1["arbiter"])]
+    keep = [m for m in ["UCRA", "FCFS", "MCTS", "CoDrivingLLM", "CoDrivingLLM-memory", "Oracle"] if m in set(e1["arbiter"])]
     d = e1[e1["arbiter"].isin(keep)]
     order = {"none": 0, "low": 1, "medium": 2, "high": 3}
     s = summary(d.sort_values("noise", key=lambda c: c.map(order)), ["arbiter", "noise"])

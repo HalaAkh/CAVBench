@@ -14,6 +14,7 @@ and is skipped otherwise.
 from __future__ import annotations
 
 import copy
+import json
 import sys
 import types
 from pathlib import Path
@@ -196,3 +197,110 @@ def test_same_prompts_and_actions_as_original_code(seed, noise, monkeypatch, cap
         done = terminated or truncated
         n_steps += 1
     assert n_steps > 10
+
+
+# ---------------------------------------------------------------------------
+# Memory module (switched off in the released code)
+# ---------------------------------------------------------------------------
+def test_generate_comment_like_benchmark():
+    assert r.generate_comment("much close", 3) == "safe and good for efficiency"
+    assert r.generate_comment("slight close", 4) == "not efficiency, consider FASTER next time"
+    assert r.generate_comment("equal close", 1) == "might not safe, you should be careful and check"
+    assert r.generate_comment("much further", 3) == "may not safe if your speed is high"
+    assert r.generate_comment("slight further", 4) == "it is safe, good for you"
+
+
+def test_memory_build_then_use(tmp_path, monkeypatch):
+    monkeypatch.setattr(r, "MEMORY_DIR", tmp_path)
+    env = make_env("intersection")
+    build = make_arbiter("codrivingllm_repro", model="mock",
+                         memory={"mode": "build", "name": "t", "embedding": "local"})
+    run_episode(env, build, seed=2)
+    files = list(tmp_path.glob("repro_t.*.jsonl"))
+    assert files and sum(1 for _ in files[0].open()) > 0
+    use = make_arbiter("codrivingllm_repro", model="mock",
+                       memory={"mode": "use", "name": "t", "embedding": "local"})
+    prompts = []
+    real = use._ask
+    use._ask = lambda p, c: (prompts.append(p), real(p, c))[1]
+    m = run_episode(env, use, seed=3)
+    assert m["memory_items"] > 0 and m["memory_hits"] > 0
+    dec = [p for p in prompts if "Above messages are some examples" in p]
+    assert dec and all("- Last time None, you choose to [" in p for p in dec)
+    n = sum(1 for _ in files[0].open())
+    assert n == sum(1 for _ in files[0].open())  # frozen: nothing written in use mode
+
+
+def test_memory_episode_kept_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(r, "MEMORY_DIR", tmp_path)
+    for name in ("repro_t.1.jsonl", "repro_t.2.jsonl"):
+        with (tmp_path / name).open("w") as f:
+            f.write('{"episode": 7, "content": "x", "metadata": {"a": 1}}\n')
+    assert len(r.ReproMemory("t", "local")) == 1
+
+
+@pytest.mark.skipif(not BENCH.is_dir(), reason="third_party/CoDrivingLLM not present")
+def test_memory_same_as_original_code(monkeypatch, tmp_path):
+    """relative_memory and memory_update give the same text and the same stored
+    items as the benchmark's own functions, on real prompts of an episode."""
+    act, neg, calls = _load_benchmark(monkeypatch)
+    monkeypatch.setattr(r, "MEMORY_DIR", tmp_path)
+    ours = r.ReproMemory("t", "local", write=True, load=False)
+    ours.start_episode(0)
+
+    class _Recorder:  # the benchmark's DrivingMemory, recording addMemory calls
+        def __init__(self):
+            self.added = []
+
+        def addMemory(self, *a):
+            self.added.append(a)
+
+        def retrieveMemory(self, q, top_k=5):
+            return ours.retrieveMemory(q, top_k)
+
+    rec = _Recorder()
+    env = make_env("intersection")
+    arb = make_arbiter("codrivingllm_repro", model="mock", parallel=False)
+    infos = []
+    real = r.prompt_engineer
+    monkeypatch.setattr(r, "prompt_engineer", lambda *a: (infos.append(real(*a)), infos[-1])[1])
+    run_episode(env, arb, seed=4)
+    assert len(infos) > 20
+    for i, info in enumerate(infos):
+        aid = [1, 3, 4][i % 3]
+        act.LlmAgent_action_module.memory_update(None, rec, info, np.array([aid]))
+        r.memory_update(ours, info, np.array([aid]))
+    assert [tuple(a) for a in rec.added] == [
+        (e["content"], *e["metadata"].values()) for e in ours._pending]
+    ours.items = [(e["content"], e["metadata"]) for e in ours._pending]
+    for info in infos[::5]:
+        assert act.LlmAgent_action_module.relative_memory(None, rec, info) == r.relative_memory(ours, info)
+
+
+def test_memory_openai_embedding_path(tmp_path, monkeypatch):
+    """The OpenAI embedding code path (batched requests, disk cache, cost),
+    with a stand-in client: no network."""
+    monkeypatch.setattr(r, "MEMORY_DIR", tmp_path)
+    sent = []
+
+    class _Emb:
+        def create(self, model, input):
+            assert model == "text-embedding-ada-002"
+            sent.append(list(input))
+            data = [types.SimpleNamespace(embedding=list(r_local(t))) for t in input]
+            return types.SimpleNamespace(data=data, usage=types.SimpleNamespace(total_tokens=10 * len(input)))
+
+    from cavbench.arbiters.llm_memory import local_embedding as r_local
+    with (tmp_path / "repro_t.1.jsonl").open("w") as f:
+        for i, txt in enumerate(["Ego is _much close_ to", "Conflict info is empty", "Ego is _equal close_ to"]):
+            f.write(json.dumps({"episode": 1, "content": txt,
+                                "metadata": {"negotiation_result": "None", "final_action": f"[{i}]",
+                                             "comments": "c"}}) + "\n")
+    mem = r.ReproMemory("t", "openai")
+    mem._client = types.SimpleNamespace(embeddings=_Emb())
+    out = mem.retrieveMemory("Ego is _equal close_ to now", top_k=2)
+    assert out[0]["final_action"] == "[2]" and len(out) == 2
+    assert mem.cost_usd > 0 and len(sent) == 2  # stored texts once, then the query
+    mem2 = r.ReproMemory("t", "openai")  # embeddings come from the disk cache now
+    mem2._client = None
+    assert mem2.retrieveMemory("Ego is _equal close_ to now", top_k=2)[0]["final_action"] == "[2]"

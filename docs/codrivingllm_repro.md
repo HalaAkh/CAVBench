@@ -75,3 +75,38 @@ per step plus about 230-380 decision calls (about 1 000 input tokens each). With
 gpt-4o-mini this comes to about 0.1-0.25 USD per episode, so roughly 12-25 USD
 for the 100 episodes of `configs/e1_codrivingllm.yaml`. Run 2 episodes first
 (see that file) to measure the real cost.
+
+## Memory module (2-shot)
+
+The released code contains the paper's memory module but switches it off:
+`past_memory = ''` in `llm_agent_action.py`, with two commented lines whose
+comments say how to switch it on.
+
+| Released code | What it does | CAVBench |
+|---|---|---|
+| line 46, `self.memory_update(memory, prompt_info, llm_action)` ("active this line to restore new memory during interaction") | after every decision, stores the last line of the scenario text (the most dangerous conflict), the action and a rule-based comment (`generate_comment`) | `memory={"mode": "build"}` |
+| line 159, `past_memory = self.relative_memory(memory, current_scenario)` ("active line46 to build your own database before you output past memory") | retrieves the 2 most similar stored decisions (`top_k=2`) and inserts them in the decision prompt | `memory={"mode": "use"}` |
+
+`relative_memory`, `memory_update` and `generate_comment` are reproduced line by
+line; `tests/test_codrivingllm_repro.py::test_memory_same_as_original_code`
+checks on real prompts that they produce the same stored items and the same
+prompt text as the original functions.
+
+Differences: the vector store. The original uses Chroma with langchain's
+`OpenAIEmbeddings` (`text-embedding-ada-002` in the pinned langchain 0.0.335) and
+Chroma's default squared-L2 distance; CAVBench stores the same embeddings in a
+list and searches them by the same distance. Among stored texts at exactly the
+same distance (identical texts), CAVBench takes the oldest first, while Chroma's
+order is not specified.
+
+Protocol (paper, Section IV-C and Fig. 7: success rises with the number of
+interactions):
+
+1. build: `python experiments/run_experiment.py configs/e1_codrivingllm_memory_build.yaml --workers 4`
+   (20 episodes on tuning seeds 100000+, noise none, about $1.4);
+2. evaluate: `python experiments/run_experiment.py configs/e1_codrivingllm_memory.yaml --workers 4`
+   (the evaluation seeds of `e1_codrivingllm.yaml`, memory frozen, about $7).
+
+The memory is stored in `results/llm_memory/repro_intersection.*.jsonl` (one file
+per worker; an episode is written only once it has finished) and the embeddings
+in `results/llm_memory/embeddings_text-embedding-ada-002.*.jsonl`.

@@ -33,6 +33,21 @@ As released: gpt-4o-mini, prompt sent as a single system message, temperature
 not set (API default), memory not used (``past_memory = ''`` in
 llm_agent_action.py; the memory database in the repository is empty).
 
+Memory module (option ``memory``, off by default). The released code contains
+the paper's memory module but switches it off with two commented lines whose
+comments say how to switch it on: ``memory_update`` (line 46, "active this line
+to restore new memory during interaction") builds the database, and
+``relative_memory`` (line 159, "with this line to active memory retrival, active
+line46 to build your own database before you output past memory") inserts the
+two most similar past decisions into the decision prompt (top_k=2, the "2-shot"
+of the paper's Table I). ``memory={"mode": "build"}`` does what line 46 does,
+``memory={"mode": "use"}`` what line 159 does, with the functions below
+reproduced from llm_agent_action.py, memory.py and prompt_llm.generate_comment.
+The vector store (Chroma with langchain's OpenAIEmbeddings, i.e.
+text-embedding-ada-002 in the pinned langchain 0.0.335) is replaced by a list of
+the same embeddings searched by squared L2 distance, Chroma's default; ties
+(identical texts) are broken by insertion order.
+
 The only differences that remain are listed in docs/codrivingllm_repro.md
 (CAVBench's own road/traffic generation, noisy shared states when an
 experiment adds noise, arrived CAVs leaving the scene, and an unusable LLM
@@ -628,6 +643,189 @@ def action_id(name) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Memory module (switched off in the released code; see the module docstring)
+# ---------------------------------------------------------------------------
+MEMORY_DIR = CACHE_DIR.parent / "llm_memory"
+EMBED_MODEL = "text-embedding-ada-002"  # default of OpenAIEmbeddings in langchain 0.0.335
+EMBED_PRICE = 0.10  # USD per million tokens (cost report only)
+
+
+def generate_comment(relation, llm_action):
+    """prompt_llm.generate_comment"""
+    if relation == 'much close' or relation == 'slight close':
+        if llm_action == 1 or llm_action == 3:
+            return 'safe and good for efficiency'
+        else:
+            return 'not efficiency, consider FASTER next time'
+    elif relation == 'equal close':
+        return 'might not safe, you should be careful and check'
+    else:
+        if llm_action == 1:
+            return 'it is not safety to accelerate, don not accelerate next time'
+        elif llm_action == 3:
+            return 'may not safe if your speed is high'
+        else:
+            return 'it is safe, good for you'
+
+
+def relative_memory(memory, prompt_info):
+    """LlmAgent_action_module.relative_memory"""
+    experience = ""
+    extract_prompt = prompt_info.strip().split('\n')
+    query_scenario = '\n'.join(extract_prompt[-2:])  # only save the last two line of prompt_info which store the most dangerous conflict as memory page_content
+    past_decisions = memory.retrieveMemory(query_scenario, top_k=2)
+    for past_decision in past_decisions:
+        experience += f"- Last time {past_decision['negotiation_result']}, you choose to {past_decision['final_action']}, it is {past_decision['comments']}\n"
+    experience += f"Above messages are some examples of how you make a decision in the past. Those scenarios are similar to the current scenario. You should refer to those examples to make a decision for the current scenario."
+    return experience
+
+
+def memory_query(prompt_info: str) -> str:
+    """The text relative_memory searches with (last two lines of the scenario)."""
+    return '\n'.join(prompt_info.strip().split('\n')[-2:])
+
+
+def memory_update(memory, prompt_info, llm_action):
+    """LlmAgent_action_module.memory_update (llm_action = np.array([action id]))"""
+    human_question = str(None)
+    negotiation = str(None)  # memory store the dangerous info (which negotiation is ego to yield) for ego vehicle
+    action = str(llm_action)
+    saved_info = prompt_info.strip().split('\n')[-1]
+    if saved_info != ' Conflict info is empty':
+        relation = re.findall(r'_(.*?)_', saved_info)
+        comments = generate_comment(relation[0], llm_action[0])
+    else:
+        comments = 'recommended to FASTER'
+    memory.addMemory(str(saved_info), human_question, negotiation, action, comments)
+
+
+class ReproMemory:
+    """memory.DrivingMemory: a store of (page_content, metadata) searched by the
+    embedding of page_content.
+
+    Building (``write=True``): items are kept per episode and written when the
+    episode ends (``flush``), one file per process, so that an interrupted
+    episode leaves nothing behind and parallel workers never share a file.
+    Using: all files ``repro_<name>.*.jsonl`` are loaded; an episode seed found
+    in two files (an episode re-run) is kept once. Embeddings of the stored
+    texts and of the queries are cached on disk.
+    """
+
+    def __init__(self, name: str = "intersection", embedding: str = "openai",
+                 write: bool = False, load: bool = True) -> None:
+        if embedding not in ("openai", "local"):
+            raise ValueError("embedding must be 'openai' or 'local'")
+        self.name, self.embedding, self.write = name, embedding, write
+        self.items: list[tuple[str, dict]] = []
+        self._pending: list[dict] = []
+        self._episode = None
+        self._vec_cache: dict[str, np.ndarray] = {}
+        self._vectors = None
+        self._client = None
+        self.embed_calls = self.embed_tokens = self.hits = 0
+        self._path = MEMORY_DIR / f"repro_{name}.{os.getpid()}.jsonl"
+        self._emb_path = MEMORY_DIR / f"embeddings_{EMBED_MODEL}.{os.getpid()}.jsonl"
+        if load:
+            self._load()
+
+    # -- storage -------------------------------------------------------------
+    def _load(self) -> None:
+        seen: dict[int, str] = {}
+        for path in sorted(MEMORY_DIR.glob(f"repro_{self.name}.*.jsonl")):
+            with path.open(encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    ep = e.get("episode")
+                    if seen.setdefault(ep, path.name) != path.name:
+                        continue  # the same episode run again in another file
+                    self.items.append((e["content"], e["metadata"]))
+        if self.embedding == "openai":
+            import base64
+            for path in sorted(MEMORY_DIR.glob(f"embeddings_{EMBED_MODEL}.*.jsonl")):
+                with path.open(encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            e = json.loads(line)
+                            self._vec_cache[e["t"]] = np.frombuffer(base64.b64decode(e["v"]), dtype=np.float32)
+                        except (ValueError, KeyError):
+                            continue
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def start_episode(self, episode) -> None:
+        self._pending, self._episode = [], episode
+
+    def addMemory(self, sce_descrip, human_question, negotiation, action, comments):
+        """DrivingMemory.addMemory"""
+        meta = {"human_question": human_question, 'negotiation_result': negotiation,
+                'final_action': action, 'comments': comments}
+        self._pending.append({"episode": self._episode, "content": sce_descrip, "metadata": meta})
+
+    def flush(self) -> None:
+        if not (self.write and self._pending):
+            self._pending = []
+            return
+        MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+        with self._path.open("a", encoding="utf-8") as f:
+            for e in self._pending:
+                f.write(json.dumps(e) + "\n")
+        self._pending = []
+
+    # -- embeddings ----------------------------------------------------------
+    def _embed(self, texts: list[str]) -> list[np.ndarray]:
+        if self.embedding == "local":
+            from .llm_memory import local_embedding
+            return [local_embedding(t).astype(np.float32) for t in texts]
+        todo = [t for t in dict.fromkeys(texts) if t not in self._vec_cache]
+        if todo:
+            import base64
+            if self._client is None:
+                require_api_key()
+                from openai import OpenAI
+                self._client = OpenAI(timeout=60.0, max_retries=6)
+            MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+            for i in range(0, len(todo), 1000):
+                batch = todo[i:i + 1000]
+                r = self._client.embeddings.create(model=EMBED_MODEL, input=batch)
+                self.embed_calls += 1
+                if getattr(r, "usage", None) is not None:
+                    self.embed_tokens += r.usage.total_tokens
+                with self._emb_path.open("a", encoding="utf-8") as f:
+                    for t, d in zip(batch, r.data):
+                        v = np.asarray(d.embedding, dtype=np.float32)
+                        self._vec_cache[t] = v
+                        f.write(json.dumps({"t": t, "v": base64.b64encode(v.tobytes()).decode()}) + "\n")
+        return [self._vec_cache[t] for t in texts]
+
+    def prefetch(self, queries: list[str]) -> None:
+        """Embed the stored texts (once) and the given queries in batches."""
+        if self._vectors is None and self.items:
+            self._vectors = np.stack(self._embed([c for c, _ in self.items]))
+        if queries and self.embedding == "openai":
+            self._embed(queries)
+
+    def retrieveMemory(self, query_scenario, top_k=5):
+        """DrivingMemory.retrieveMemory: the top_k nearest stored items
+        (squared L2 distance, Chroma's default; ties in insertion order)."""
+        if not self.items:
+            return []
+        self.prefetch([])
+        q = self._embed([query_scenario])[0]
+        d = ((self._vectors - q[None, :]) ** 2).sum(axis=1)
+        idx = np.argsort(d, kind="stable")[:top_k]
+        self.hits += len(idx)
+        return [self.items[i][1] for i in idx]
+
+    @property
+    def cost_usd(self) -> float:
+        return self.embed_tokens * EMBED_PRICE / 1e6
+
+
+# ---------------------------------------------------------------------------
 # LLM client: one system message, temperature not sent (as released)
 # ---------------------------------------------------------------------------
 class ReproLLM:
@@ -752,14 +950,20 @@ class CoDrivingLLMReproArbiter(Arbiter):
       methods); speed_cap=True (the benchmark's 5 m/s cap at the intersection);
       safety=False (no extra safety layer; "follow" adds CAVBench's shared one);
       parallel=True (the per-CAV decision calls are independent, so they are
-      sent together; the answers are the same as sending them one by one).
+      sent together; the answers are the same as sending them one by one);
+      memory=None (as released). {"mode": "build", "name": ...} stores every
+      decision as line 46 of llm_agent_action.py would (no retrieval);
+      {"mode": "use", "name": ...} adds the two most similar stored decisions
+      to each decision prompt as line 159 would (memory frozen). Optional keys:
+      "embedding" ("openai" or "local", for tests), "top_k" (2).
     """
 
     name = "codrivingllm_repro"
 
     def __init__(self, model: str = "gpt-4o-mini", llm_fn=None, temperature: float | None = None,
                  vehicle: str = "benchmark", speed_cap: bool = True, safety: bool | str = False,
-                 parallel: bool = True, scene: str | None = None, **kw) -> None:
+                 parallel: bool = True, scene: str | None = None, memory: dict | None = None,
+                 **kw) -> None:
         super().__init__(safety=safety, **kw)
         if vehicle not in ("benchmark", "cavbench"):
             raise ValueError("vehicle must be 'benchmark' or 'cavbench'")
@@ -770,6 +974,21 @@ class CoDrivingLLMReproArbiter(Arbiter):
         self._seed = 0
         self._step = 0
         self.n_negotiation = self.n_decision = self.unusable = self.llm_failures = 0
+        self.memory_mode = None
+        self.memory = None
+        if memory:
+            mode = memory.get("mode")
+            if mode not in ("build", "use"):
+                raise ValueError("memory mode must be 'build' or 'use'")
+            if int(memory.get("top_k", 2)) != 2:
+                raise ValueError("the released code retrieves top_k=2")
+            self.memory_mode = mode
+            self.memory = ReproMemory(memory.get("name", "intersection"),
+                                      memory.get("embedding", "openai"),
+                                      write=(mode == "build"), load=(mode == "use"))
+            if mode == "use" and len(self.memory) == 0:
+                raise RuntimeError(f"memory '{self.memory.name}' is empty: run the build step first "
+                                   f"(configs/e1_codrivingllm_memory_build.yaml)")
 
     # -- episode setup ---------------------------------------------------
     def reset(self, seed=None) -> None:
@@ -780,6 +999,9 @@ class CoDrivingLLMReproArbiter(Arbiter):
         c = self._llm
         self._usage0 = ((c.calls, c.cache_hits, c.tokens_in, c.tokens_out, c.cost_usd)
                         if isinstance(c, ReproLLM) else None)
+        if self.memory is not None:
+            self.memory.start_episode(self._seed)
+            self._mem0 = (self.memory.embed_calls, self.memory.hits, self.memory.cost_usd)
 
     def attach(self, env) -> None:
         """Called by the runner after env.reset(): keeps the environment (to read
@@ -864,6 +1086,7 @@ class CoDrivingLLMReproArbiter(Arbiter):
         #    just before its prompt is built (llm_controller_run)
         vehicles = list(bv.values())
         prompts = {}
+        infos = {}
         for vid in cav_order:
             if vid not in all_cavs:
                 continue
@@ -876,7 +1099,12 @@ class CoDrivingLLMReproArbiter(Arbiter):
             limit = cfg["ttcp_speed_limit"] or float(getattr(vmap[vid].lane, "speed_limit", 10.0) or 10.0)
             neg_results = negotiation_results_for(ego, neg_reply)
             info = prompt_engineer(ego, vehicles, env.road.network, neg_results, conflicting_info, limit)
-            prompts[vid] = decision_prompt(info, neg_results, "")
+            infos[vid] = (info, neg_results)
+        if self.memory_mode == "use":  # embed all queries of this step in one request
+            self.memory.prefetch([memory_query(info) for info, _ in infos.values()])
+        for vid, (info, neg_results) in infos.items():
+            past = relative_memory(self.memory, info) if self.memory_mode == "use" else ""
+            prompts[vid] = decision_prompt(info, neg_results, past)
 
         # 3) the decision calls
         vids = list(prompts)
@@ -890,6 +1118,8 @@ class CoDrivingLLMReproArbiter(Arbiter):
             self.n_decision += 1
             name = extract_decision(reply)
             aid = action_id(name)
+            if self.memory_mode == "build":  # line 46 of llm_agent_action.py
+                memory_update(self.memory, infos[vid][0], np.array([aid]))
             if aid == -1:  # the benchmark would stop with an error here
                 self.unusable += 1
                 actions[vid] = IDLE
@@ -913,4 +1143,12 @@ class CoDrivingLLMReproArbiter(Arbiter):
             d = [b - a for a, b in zip(base, now)]
             m.update({"llm_calls": d[0], "llm_cache_hits": d[1], "llm_tokens_in": d[2],
                       "llm_tokens_out": d[3], "llm_cost_usd": round(d[4], 6)})
+        if self.memory is not None:
+            mem = self.memory
+            m0 = getattr(self, "_mem0", (0, 0, 0.0))
+            self.memory.flush()  # build mode: this episode's decisions are stored now
+            m.update({"llm_calls_embedding": mem.embed_calls - m0[0], "memory_items": len(mem),
+                      "memory_hits": mem.hits - m0[1]})
+            if "llm_cost_usd" in m:
+                m["llm_cost_usd"] = round(m["llm_cost_usd"] + mem.cost_usd - m0[2], 6)
         return m
