@@ -17,8 +17,7 @@ risk arbitration for connected autonomous vehicles with fuzzy decision-making"*
   2025), all using the same noisy shared states and the same low-level safety layer;
 - **Metrics:** success, collisions, post-encroachment time (PET < 1.5 s = severe
   conflict), average speed and decision time;
-- **Experiment protocol:** YAML configurations, matched random seeds, a parallel and
-  resumable runner, and a statistics notebook;
+- **Experiment protocol:** YAML configurations, matched random seeds, a parallel and resumable runner, a statistics report (experiments/final_report.py) and the paper's figures (experiments/make_figures.py);
 - **Viewer:** watch any episode with its decisions, or save it as a video.
 
 CAVBench uses the open-source [HighwayEnv](https://github.com/Farama-Foundation/HighwayEnv)
@@ -79,7 +78,8 @@ uncertainty U and fuzzy acceptability A.
 ```bash
 python experiments/run_all.py              # E4, E5, E2, E3, E1 without the LLM, and E6
 python experiments/run_all.py --with-llm   # the same, plus the LLM baseline (API key)
-jupyter notebook analysis/statistics.ipynb # tables, statistical tests, figures
+python experiments/final_report.py     # tables and paired tests -> results/final_report.md
+python experiments/make_figures.py     # figures -> results/figures/ (PDF + PNG)
 ```
 
 Use `--episodes 20` for a quick trial. The experiments one by one:
