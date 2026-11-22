@@ -77,15 +77,34 @@ def hbar(ax, labels, vals, colors, err=None, fmt="{:.1f}", xmax=None, ref=None):
 
 
 # ---------------------------------------------------------------- E1
-def fig_main(e1):
+MATCHED = ["UCRA", "FCFS", "MCTS", "CoDrivingLLM", "CoDrivingLLM-memory", "NoCoord"]
+
+
+def matched_intersection(e1):
+    """The intersection episodes (noise level, seed) that EVERY compared method ran,
+    so that all bars rest on exactly the same episodes (equal n). The oracle runs at
+    noise none only (it uses the true states), so it gets the noise-none part."""
     d = e1[e1.scenario == "intersection"]
-    order = ["UCRA", "Oracle", "FCFS", "MCTS", "CoDrivingLLM-memory", "CoDrivingLLM", "NoCoord"]
-    order = [m for m in order if m in set(d.arbiter)]
+    present = [m for m in MATCHED if m in set(d.arbiter)]
+    keys = None
+    for m in present:
+        k = set(map(tuple, d[d.arbiter == m][["noise", "seed"]].values))
+        keys = k if keys is None else keys & k
+    keyset = keys or set()
+    mask = [ (n, s) in keyset for n, s in zip(d.noise, d.seed) ]
+    return d[mask], present
+
+
+def fig_main(e1):
+    d, present = matched_intersection(e1)
+    order = [m for m in ["UCRA", "Oracle", "FCFS", "MCTS", "CoDrivingLLM-memory", "CoDrivingLLM", "NoCoord"]
+             if m in set(d.arbiter)]
+    n_match = len(d[d.arbiter == "UCRA"])
     fig, axes = plt.subplots(1, 3, figsize=(10.5, 3.0), gridspec_kw={"wspace": 0.9})
     s = [rate_ci(d[d.arbiter == m].success.astype(bool)) for m in order]
     lab = [f"{NAME.get(m, m)} (n={len(d[d.arbiter == m])})" for m in order]
     hbar(axes[0], lab, [x[0] for x in s], [COL[m] for m in order],
-         err=np.array([[x[1] for x in s], [x[2] for x in s]]), xmax=115)
+         err=np.array([[x[1] for x in s], [x[2] for x in s]]), xmax=118)
     axes[0].set_title("(a) Success (%)")
     col = [100 * d[d.arbiter == m].collision.astype(bool).mean() for m in order]
     hbar(axes[1], [NAME.get(m, m) for m in order], col, [COL[m] for m in order], xmax=max(col) * 1.2)
@@ -93,7 +112,10 @@ def fig_main(e1):
     sev = [100 * d[d.arbiter == m].any_severe_conflict.astype(bool).mean() for m in order]
     hbar(axes[2], [NAME.get(m, m) for m in order], sev, [COL[m] for m in order], xmax=max(sev) * 1.2)
     axes[2].set_title("(c) Episodes with PET < 1.5 s (%)")
-    fig.suptitle("Intersection, all noise levels (E1)", y=1.04, fontsize=10)
+    seeds = d[d.arbiter == "UCRA"].seed
+    fig.suptitle(f"Intersection, matched episodes: the same {n_match} episodes for every method "
+                 f"(seeds {seeds.min()}-{seeds.max()}, noise none and high; oracle: noise none)",
+                 y=1.05, fontsize=9.5)
     save(fig, "fig_e1_main")
 
 
@@ -111,8 +133,9 @@ def paired_time(e1, a, b, scen=None, noise=None):
 
 
 def fig_time(e1):
-    others = [m for m in ["FCFS", "CoDrivingLLM", "CoDrivingLLM-memory", "MCTS", "Oracle"] if m in set(e1.arbiter)]
-    rows = [(m, *paired_time(e1, "UCRA", m)) for m in others]
+    d, present = matched_intersection(e1)
+    others = [m for m in ["FCFS", "CoDrivingLLM", "CoDrivingLLM-memory", "MCTS", "Oracle"] if m in set(d.arbiter)]
+    rows = [(m, *paired_time(d, "UCRA", m)) for m in others]
     fig, ax = plt.subplots(figsize=(6.2, 2.8))
     x = np.arange(len(rows))
     ax.bar(x - 0.2, [r[1] for r in rows], 0.4, color=COL["UCRA"], label="UCRA")
@@ -122,7 +145,8 @@ def fig_time(e1):
         ax.text(xi, max(r[1], r[2]) + 0.8, f"{ch:+.0f} %", ha="center", fontsize=8)
     ax.set_xticks(x, [f"vs {NAME.get(r[0], r[0])}\n(n={r[3]})" for r in rows], fontsize=8)
     ax.set_ylabel("episode time (s)")
-    ax.set_title("Episode time on matched episodes completed by both")
+    ax.set_ylim(0, max(max(r[1], r[2]) for r in rows) * 1.18)
+    ax.set_title("Episode time, matched intersection episodes completed by both")
     ax.legend(frameon=False, fontsize=8, loc="upper right")
     save(fig, "fig_e1_paired_time")
 
